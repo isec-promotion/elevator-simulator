@@ -123,8 +123,9 @@
 }
 
 .floor-button.current.target {
-  background: linear-gradient(135deg, #2196f3 0%, #1976d2 100%);
-  border-color: #2196f3;
+  background: linear-gradient(135deg, #4caf50 0%, #45a049 100%);
+  border-color: #4caf50;
+  animation: pulse 2s infinite;
 }
 
 @keyframes blink {
@@ -256,6 +257,107 @@
   background: linear-gradient(135deg, #ff9800 0%, #f57c00 100%);
   color: white;
   border-color: #ff9800;
+}
+
+.load-controls {
+  padding: 1.5rem;
+  border-bottom: 1px solid #e1e5e9;
+}
+
+.load-controls h3 {
+  margin: 0 0 1rem 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #2c3e50;
+}
+
+.load-input {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem;
+  background: #f8f9fa;
+  border-radius: 8px;
+  border: 1px solid #e1e5e9;
+}
+
+.load-input .label {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: #6c757d;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  min-width: 80px;
+}
+
+.load-input input {
+  flex: 1;
+  padding: 0.75rem 1rem;
+  border: 2px solid #e1e5e9;
+  border-radius: 6px;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #2c3e50;
+  background: white;
+  transition: all 0.2s ease;
+  text-align: center;
+  min-width: 0;
+}
+
+.load-input input:focus {
+  outline: none;
+  border-color: #667eea;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+  background: #fafbff;
+}
+
+.load-input input:hover {
+  border-color: #b0bec5;
+}
+
+.load-input input::placeholder {
+  color: #9e9e9e;
+  font-weight: 400;
+}
+
+.load-input .unit {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #6c757d;
+  min-width: 30px;
+  text-align: center;
+}
+
+/* エラーメッセージスタイル */
+.error-message {
+  margin: 1rem 1.5rem;
+  padding: 1rem;
+  background: linear-gradient(135deg, #ffebee 0%, #ffcdd2 100%);
+  border: 1px solid #f44336;
+  border-radius: 8px;
+  color: #c62828;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  animation: slideIn 0.3s ease-out;
+}
+
+.error-message span {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .load-display {

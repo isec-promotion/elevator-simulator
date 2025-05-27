@@ -6,8 +6,12 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "dev:sim": "tsx watch src/index.ts --simulation",
+    "dev:simulation": "SIMULATION_MODE=true tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
+    "start:sim": "node dist/index.js --simulation",
+    "start:simulation": "SIMULATION_MODE=true node dist/index.js",
     "lint": "eslint src --ext .ts",
     "type-check": "tsc --noEmit"
   },

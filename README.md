@@ -50,7 +50,7 @@ elevator-simulator/
 
 - **Node.js** - JavaScript 実行環境
 - **TypeScript** - 型安全な JavaScript
-- **Express** - Web フレームワーク
+- **Hono** - Web フレームワーク
 - **ws** - WebSocket 通信
 - **serialport** - シリアル通信（RS422）
 

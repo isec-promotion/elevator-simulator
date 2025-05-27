@@ -10,8 +10,13 @@ const CommunicationLogs: React.FC<CommunicationLogsProps> = ({ logs }) => {
   const logsEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    // 新しいログが追加されたら自動スクロール
-    logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    // 新しいログが追加されたら自動スクロール（ログコンテナ内のみ）
+    if (logsEndRef.current) {
+      const container = logsEndRef.current.closest(".table-body");
+      if (container) {
+        container.scrollTop = container.scrollHeight;
+      }
+    }
   }, [logs]);
 
   const formatTimestamp = (timestamp: string) => {
@@ -21,7 +26,6 @@ const CommunicationLogs: React.FC<CommunicationLogsProps> = ({ logs }) => {
         hour: "2-digit",
         minute: "2-digit",
         second: "2-digit",
-        fractionalSecondDigits: 3,
       });
     } catch {
       return timestamp;
@@ -87,6 +91,24 @@ const CommunicationLogs: React.FC<CommunicationLogsProps> = ({ logs }) => {
 
     // HEXデータの場合、見やすく整形
     if (data.match(/^[0-9a-fA-F]+$/)) {
+      // SEC-3000H形式のシリアル通信データを解析
+      if (data.length >= 20) {
+        const formatted = data
+          .toUpperCase()
+          .replace(/(.{2})/g, "$1 ")
+          .trim();
+
+        // ENQ + 局番号 + コマンド + データ番号 + データ + チェックサム の形式で表示
+        const enq = data.substring(0, 2);
+        const station = data.substring(2, 10);
+        const cmd = data.substring(10, 12);
+        const dataNum = data.substring(12, 20);
+        const dataValue = data.substring(20, 28);
+        const checksum = data.substring(28, 32);
+
+        return `${enq} ${station} ${cmd} ${dataNum} ${dataValue} ${checksum}`;
+      }
+
       return data
         .toUpperCase()
         .replace(/(.{2})/g, "$1 ")

@@ -90,6 +90,10 @@ export class WebSocketHandler {
           });
           break;
 
+        case "setWeight":
+          await this.handleSetWeight(ws, message.data?.weight);
+          break;
+
         case "updateConfig":
           await this.handleUpdateConfig(ws, message.data);
           break;
@@ -163,6 +167,31 @@ export class WebSocketHandler {
         success: result.success,
         action,
         message: result.success ? `Door ${action} command sent` : result.error,
+        details: result.data,
+      },
+    });
+
+    // 状態更新をブロードキャスト
+    this.broadcastStatus();
+  }
+
+  private async handleSetWeight(ws: WebSocket, weight: number): Promise<void> {
+    if (weight === undefined || typeof weight !== "number") {
+      this.sendToClient(ws, {
+        type: "error",
+        data: { message: "Invalid weight parameter" },
+      });
+      return;
+    }
+
+    const result = await this.elevatorController.setWeight(weight);
+
+    this.sendToClient(ws, {
+      type: "weightResult",
+      data: {
+        success: result.success,
+        weight,
+        message: result.success ? `Weight set to ${weight}kg` : result.error,
         details: result.data,
       },
     });

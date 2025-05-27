@@ -11,7 +11,7 @@ export interface ElevatorStatus {
   doorStatus: "open" | "closed" | "opening" | "closing" | "unknown";
   isMoving: boolean;
   loadWeight: number | null;
-  connectionStatus: "connected" | "disconnected" | "error";
+  connectionStatus: "connected" | "disconnected" | "error" | "simulation";
   lastCommunication: string | null;
 }
 
@@ -50,7 +50,7 @@ const App: React.FC = () => {
     const connectWebSocket = () => {
       try {
         setConnectionStatus("connecting");
-        const ws = new WebSocket("ws://localhost:3000");
+        const ws = new WebSocket("ws://localhost:3001");
 
         ws.onopen = () => {
           console.log("✅ WebSocket connected");
@@ -112,6 +112,7 @@ const App: React.FC = () => {
 
       case "floorResult":
       case "doorResult":
+      case "weightResult":
         console.log("Command result:", message.data);
         // 結果に応じてUIを更新（必要に応じて）
         break;
@@ -148,6 +149,13 @@ const App: React.FC = () => {
     sendCommand({
       type: "controlDoor",
       data: { action },
+    });
+  };
+
+  const handleWeightSet = (weight: number) => {
+    sendCommand({
+      type: "setWeight",
+      data: { weight },
     });
   };
 
@@ -200,6 +208,7 @@ const App: React.FC = () => {
             status={status}
             onFloorSelect={handleFloorSelect}
             onDoorControl={handleDoorControl}
+            onWeightSet={handleWeightSet}
           />
 
           <StatusMonitor status={status} connectionStatus={connectionStatus} />

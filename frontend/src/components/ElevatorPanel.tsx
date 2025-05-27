@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { ElevatorStatus } from "../App";
 import "./ElevatorPanel.css";
 
@@ -6,13 +6,16 @@ interface ElevatorPanelProps {
   status: ElevatorStatus;
   onFloorSelect: (floor: string) => void;
   onDoorControl: (action: "open" | "close" | "stop") => void;
+  onWeightSet: (weight: number) => void;
 }
 
 const ElevatorPanel: React.FC<ElevatorPanelProps> = ({
   status,
   onFloorSelect,
   onDoorControl,
+  onWeightSet,
 }) => {
+  const [errorMessage, setErrorMessage] = useState<string>("");
   const floors = ["B1F", "1F", "2F", "3F", "4F", "5F"];
 
   const getFloorButtonClass = (floor: string) => {
@@ -43,6 +46,26 @@ const ElevatorPanel: React.FC<ElevatorPanelProps> = ({
 
   const getDoorStatusClass = () => {
     return `door-status ${status.doorStatus}`;
+  };
+
+  const handleFloorSelect = (floor: string) => {
+    if (status.doorStatus !== "closed") {
+      let errorMessage = "";
+      if (status.doorStatus === "open" || status.doorStatus === "opening") {
+        errorMessage =
+          "扉が開いています。扉を閉めてから階数を選択してください。";
+      } else if (status.doorStatus === "closing") {
+        errorMessage = "扉が閉まるまでお待ちください。";
+      } else {
+        errorMessage =
+          "扉の状態が不明です。扉を閉めてから階数を選択してください。";
+      }
+      setErrorMessage(errorMessage);
+      setTimeout(() => setErrorMessage(""), 5000);
+      return;
+    }
+    setErrorMessage("");
+    onFloorSelect(floor);
   };
 
   return (
@@ -77,7 +100,7 @@ const ElevatorPanel: React.FC<ElevatorPanelProps> = ({
             <button
               key={floor}
               className={getFloorButtonClass(floor)}
-              onClick={() => onFloorSelect(floor)}
+              onClick={() => handleFloorSelect(floor)}
               disabled={status.isMoving}
             >
               {floor}
@@ -85,6 +108,12 @@ const ElevatorPanel: React.FC<ElevatorPanelProps> = ({
           ))}
         </div>
       </div>
+
+      {errorMessage && (
+        <div className="error-message">
+          <span>⚠️ {errorMessage}</span>
+        </div>
+      )}
 
       <div className="door-controls">
         <h3>扉制御</h3>
@@ -130,11 +159,34 @@ const ElevatorPanel: React.FC<ElevatorPanelProps> = ({
         </div>
       </div>
 
-      <div className="load-display">
-        <span className="label">荷重:</span>
-        <span className="value">
-          {status.loadWeight !== null ? `${status.loadWeight}kg` : "--"}
-        </span>
+      <div className="load-controls">
+        <h3>荷重設定</h3>
+        <div className="load-input">
+          <span className="label">現在荷重:</span>
+          <input
+            type="number"
+            value={status.loadWeight !== null ? status.loadWeight : ""}
+            onChange={(e) => {
+              const value = e.target.value;
+              if (value === "") {
+                onWeightSet(0);
+              } else {
+                const weight = parseFloat(value);
+                if (!isNaN(weight) && weight >= 0 && weight <= 1000) {
+                  onWeightSet(weight);
+                } else if (weight < 0 || weight > 1000) {
+                  setErrorMessage("荷重は0-1000kgの範囲で入力してください。");
+                  setTimeout(() => setErrorMessage(""), 5000);
+                }
+              }
+            }}
+            placeholder="0-1000kg"
+            min="0"
+            max="1000"
+            step="1"
+          />
+          <span className="unit">kg</span>
+        </div>
       </div>
     </div>
   );

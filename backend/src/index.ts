@@ -17,8 +17,20 @@ app.use(
   })
 );
 
+// 疑似モードの判定（環境変数またはコマンドライン引数から）
+const simulationMode =
+  process.env.SIMULATION_MODE === "true" ||
+  process.argv.includes("--simulation") ||
+  process.argv.includes("--sim");
+
+if (simulationMode) {
+  console.log("🎭 Starting in simulation mode");
+} else {
+  console.log("🔌 Starting in normal mode");
+}
+
 // エレベーター制御インスタンス
-const elevatorController = new ElevatorController();
+const elevatorController = new ElevatorController(simulationMode);
 
 // ヘルスチェック
 app.get("/health", (c) => {
@@ -103,6 +115,38 @@ app.get("/api/elevator/logs", (c) => {
   return c.json(elevatorController.getLogs());
 });
 
+// 荷重設定API
+app.post("/api/elevator/weight", async (c) => {
+  try {
+    const { weight } = await c.req.json();
+
+    if (weight === undefined || typeof weight !== "number" || weight < 0) {
+      return c.json({ error: "Invalid weight parameter" }, 400);
+    }
+
+    const result = await elevatorController.setWeight(weight);
+
+    if (result.success) {
+      return c.json({
+        success: true,
+        message: `Weight set to ${weight}kg`,
+        data: result.data,
+      });
+    } else {
+      return c.json(
+        {
+          success: false,
+          error: result.error,
+        },
+        500
+      );
+    }
+  } catch (error) {
+    console.error("Weight setting error:", error);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
 // 通信設定API
 app.post("/api/elevator/config", async (c) => {
   try {
@@ -143,41 +187,35 @@ app.onError((err, c) => {
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 
-// HTTPサーバーとWebSocketサーバーを作成
-const server = createServer();
-const wss = new WebSocketServer({ server });
+// Honoサーバーを起動
+const server = serve({
+  fetch: app.fetch,
+  port: PORT,
+});
+
+// WebSocketサーバーを別ポートで作成
+const wsPort = PORT + 1;
+const wss = new WebSocketServer({ port: wsPort });
 
 // WebSocketハンドラーを初期化
 const wsHandler = new WebSocketHandler(elevatorController);
 wsHandler.initialize(wss);
 
-// Honoアプリをサーバーにマウント
-server.on(
-  "request",
-  serve({
-    fetch: app.fetch,
-    port: PORT,
-  })
+console.log(
+  `🚀 Elevator Simulator Backend Server running on http://localhost:${PORT}`
 );
+console.log(`📡 WebSocket Server running on ws://localhost:${wsPort}`);
+console.log(`🏗️  Frontend should be running on http://localhost:5173`);
 
-// サーバー開始
-server.listen(PORT, () => {
-  console.log(
-    `🚀 Elevator Simulator Backend Server running on http://localhost:${PORT}`
-  );
-  console.log(`📡 WebSocket Server running on ws://localhost:${PORT}`);
-  console.log(`🏗️  Frontend should be running on http://localhost:5173`);
-
-  // エレベーター制御システム初期化
-  elevatorController
-    .initialize()
-    .then(() => {
-      console.log("✅ Elevator Controller initialized");
-    })
-    .catch((error) => {
-      console.error("❌ Elevator Controller initialization failed:", error);
-    });
-});
+// エレベーター制御システム初期化
+elevatorController
+  .initialize()
+  .then(() => {
+    console.log("✅ Elevator Controller initialized");
+  })
+  .catch((error) => {
+    console.error("❌ Elevator Controller initialization failed:", error);
+  });
 
 // グレースフルシャットダウン
 process.on("SIGINT", async () => {

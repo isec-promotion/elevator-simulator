@@ -7,7 +7,7 @@ export interface ElevatorStatus {
   doorStatus: "open" | "closed" | "opening" | "closing" | "unknown";
   isMoving: boolean;
   loadWeight: number | null;
-  connectionStatus: "connected" | "disconnected" | "error";
+  connectionStatus: "connected" | "disconnected" | "error" | "simulation";
   lastCommunication: string | null;
 }
 
@@ -22,9 +22,9 @@ export interface CommunicationLog {
 export interface ElevatorConfig {
   serialPort: string;
   baudRate: number;
-  dataBits: number;
+  dataBits: 5 | 6 | 7 | 8;
   parity: "none" | "even" | "odd";
-  stopBits: number;
+  stopBits: 1 | 1.5 | 2;
   timeout: number;
   retryCount: number;
 }
@@ -46,8 +46,8 @@ export enum ElevatorCommands {
 
 export enum DoorControl {
   STOP = 0x0000,
-  OPEN = 0x0001,
-  CLOSE = 0x0002,
+  OPEN = 0x0001, // bit0: 開扉開始
+  CLOSE = 0x0002, // bit1: 閉扉開始
 }
 
 export class ElevatorController {
@@ -57,8 +57,11 @@ export class ElevatorController {
   private logs: CommunicationLog[] = [];
   private isInitialized = false;
   private reconnectTimer: NodeJS.Timeout | null = null;
+  private simulationMode: boolean = false;
+  private simulationTimer: NodeJS.Timeout | null = null;
 
-  constructor() {
+  constructor(simulationMode: boolean = false) {
+    this.simulationMode = simulationMode;
     this.config = {
       serialPort: "COM1", // デフォルト値、実際の環境に応じて変更
       baudRate: 9600,
@@ -75,14 +78,43 @@ export class ElevatorController {
       doorStatus: "unknown",
       isMoving: false,
       loadWeight: null,
-      connectionStatus: "disconnected",
+      connectionStatus: simulationMode ? "simulation" : "disconnected",
       lastCommunication: null,
     };
+
+    if (simulationMode) {
+      console.log("🎭 Elevator Controller initialized in simulation mode");
+      this.startSimulation();
+    }
+  }
+
+  private startSimulation(): void {
+    // 疑似モードでの初期状態設定
+    this.status.currentFloor = "1F";
+    this.status.doorStatus = "closed";
+    this.status.loadWeight = 0;
+    this.status.connectionStatus = "connected"; // RS422接続中として表示
+    this.status.lastCommunication = new Date().toISOString();
+
+    this.addLog(
+      "system",
+      "Simulation mode started",
+      "success",
+      "疑似モード: RS422接続中"
+    );
   }
 
   async initialize(): Promise<void> {
     try {
       console.log("🔧 Initializing Elevator Controller...");
+
+      if (this.simulationMode) {
+        console.log(
+          "🎭 Running in simulation mode - skipping serial port initialization"
+        );
+        this.isInitialized = true;
+        return;
+      }
 
       // シリアルポートの利用可能性をチェック
       const ports = await SerialPort.list();
@@ -97,7 +129,9 @@ export class ElevatorController {
         console.warn(
           `⚠️  Configured port ${this.config.serialPort} not found. Using simulation mode.`
         );
-        this.status.connectionStatus = "disconnected";
+        this.simulationMode = true;
+        this.status.connectionStatus = "simulation";
+        this.startSimulation();
         this.isInitialized = true;
         return;
       }
@@ -107,8 +141,11 @@ export class ElevatorController {
       console.log("✅ Elevator Controller initialized successfully");
     } catch (error) {
       console.error("❌ Failed to initialize Elevator Controller:", error);
-      this.status.connectionStatus = "error";
-      this.isInitialized = true; // シミュレーションモードで続行
+      console.log("🎭 Falling back to simulation mode");
+      this.simulationMode = true;
+      this.status.connectionStatus = "simulation";
+      this.startSimulation();
+      this.isInitialized = true;
     }
   }
 
@@ -232,23 +269,72 @@ export class ElevatorController {
     return response.subarray(0, offset);
   }
 
+  private formatSerialData(message: Buffer): string {
+    if (message.length < 10) {
+      return "Invalid message";
+    }
+
+    const enq = message[0].toString(16).padStart(2, "0").toUpperCase();
+    const station = message.subarray(1, 5).toString("ascii");
+    const command = String.fromCharCode(message[5]);
+    const dataNum = message.subarray(6, 10).toString("ascii");
+    const data = message.subarray(10, 14).toString("ascii");
+    const checksum = message.subarray(14, 16).toString("ascii");
+
+    // データ番号の意味を解釈
+    let dataDescription = "";
+    const dataNumInt = parseInt(dataNum);
+    switch (dataNumInt) {
+      case 0x0010:
+        const floorValue = parseInt(data, 16);
+        const floorName = floorValue === 0xffff ? "B1F" : `${floorValue}F`;
+        dataDescription = `階数設定: ${floorName}`;
+        break;
+      case 0x0011:
+        const doorValue = parseInt(data, 16);
+        let doorAction = "";
+        if (doorValue === 0x0001) doorAction = "開扉";
+        else if (doorValue === 0x0002) doorAction = "閉扉";
+        else if (doorValue === 0x0000) doorAction = "停止";
+        else doorAction = "不明";
+        dataDescription = `扉制御: ${doorAction}`;
+        break;
+      case 0x0003:
+        const weightValue = parseInt(data, 16);
+        dataDescription = `荷重設定: ${weightValue}kg`;
+        break;
+      default:
+        dataDescription = `データ番号: ${dataNum}`;
+    }
+
+    return `ENQ(${enq}) 局番号:${station} CMD:${command} ${dataDescription} データ:${data} チェックサム:${checksum}`;
+  }
+
   private async sendCommand(
     targetStation: number,
     command: ElevatorCommands,
     data: number
   ): Promise<CommandResult> {
-    if (!this.serialPort?.isOpen) {
+    // 実際の送信データを作成（シミュレーションモードでも表示用）
+    const message = this.createWriteCommand(targetStation, command, data);
+    const hexData = message.toString("hex").toUpperCase();
+    const readableData = this.formatSerialData(message);
+
+    if (this.simulationMode || !this.serialPort?.isOpen) {
       // シミュレーションモード
       console.log(
         `🎭 Simulation: Sending command ${command.toString(
           16
         )} with data ${data.toString(16)} to station ${targetStation}`
       );
-      this.addLog(
-        "send",
-        `Simulation: ${command.toString(16)}:${data.toString(16)}`,
-        "success"
-      );
+      console.log(`📡 Serial Data: ${hexData}`);
+      console.log(`📋 Readable: ${readableData}`);
+
+      this.addLog("send", hexData, "success", `${readableData} (疑似モード)`);
+
+      // 疑似的な応答遅延
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
       return { success: true, data: { simulation: true } };
     }
 
@@ -430,9 +516,37 @@ export class ElevatorController {
 
   // パブリックメソッド
   async setFloor(floor: string): Promise<CommandResult> {
+    // 安全チェック: 扉が閉まっていない場合は移動を拒否
+    if (this.status.doorStatus !== "closed") {
+      let errorMessage = "";
+      if (
+        this.status.doorStatus === "open" ||
+        this.status.doorStatus === "opening"
+      ) {
+        errorMessage =
+          "扉が開いています。扉を閉めてから階数を選択してください。";
+      } else if (this.status.doorStatus === "closing") {
+        errorMessage = "扉が閉まるまでお待ちください。";
+      } else {
+        errorMessage =
+          "扉の状態が不明です。扉を閉めてから階数を選択してください。";
+      }
+
+      this.addLog(
+        "system",
+        `Floor setting rejected: ${floor}`,
+        "error",
+        `安全エラー: ${errorMessage}`
+      );
+      return {
+        success: false,
+        error: errorMessage,
+      };
+    }
+
     const floorData = this.encodeFloor(floor);
     const result = await this.sendCommand(
-      0x0002,
+      0x0001,
       ElevatorCommands.FLOOR_SETTING,
       floorData
     );
@@ -445,6 +559,12 @@ export class ElevatorController {
       setTimeout(() => {
         this.status.currentFloor = floor;
         this.status.isMoving = false;
+        this.addLog(
+          "system",
+          `Floor changed to ${floor}`,
+          "success",
+          `疑似モード: ${floor}に移動完了`
+        );
       }, 3000);
     }
 
@@ -471,7 +591,7 @@ export class ElevatorController {
     }
 
     const result = await this.sendCommand(
-      0x0002,
+      0x0001,
       ElevatorCommands.DOOR_CONTROL,
       doorCmd
     );
@@ -483,8 +603,51 @@ export class ElevatorController {
       if (action !== "stop") {
         setTimeout(() => {
           this.status.doorStatus = action === "open" ? "open" : "closed";
+          this.addLog(
+            "system",
+            `Door ${action} completed`,
+            "success",
+            `疑似モード: ドア${action === "open" ? "開" : "閉"}完了`
+          );
         }, 2000);
       }
+    }
+
+    return result;
+  }
+
+  async setWeight(weight: number): Promise<CommandResult> {
+    // 荷重の範囲チェック (0-1000kg)
+    if (weight < 0 || weight > 1000) {
+      this.addLog(
+        "system",
+        `Weight setting rejected: ${weight}kg`,
+        "error",
+        "荷重エラー: 0-1000kgの範囲で入力してください。"
+      );
+      return {
+        success: false,
+        error: "荷重は0-1000kgの範囲で入力してください。",
+      };
+    }
+
+    // 注意: 荷重は通常エレベータから自動運転装置への送信データです
+    // シミュレーション目的でのみ使用
+    const result = await this.sendCommand(
+      0x0001,
+      ElevatorCommands.LOAD_WEIGHT,
+      weight
+    );
+
+    if (result.success) {
+      this.status.loadWeight = weight;
+      this.status.lastCommunication = new Date().toISOString();
+      this.addLog(
+        "system",
+        `Weight set to ${weight}kg`,
+        "success",
+        `疑似モード: 荷重を${weight}kgに設定`
+      );
     }
 
     return result;
@@ -505,7 +668,11 @@ export class ElevatorController {
       this.config = { ...this.config, ...newConfig };
 
       // シリアルポート設定が変更された場合は再接続
-      if (newConfig.serialPort && this.serialPort?.isOpen) {
+      if (
+        newConfig.serialPort &&
+        this.serialPort?.isOpen &&
+        !this.simulationMode
+      ) {
         await this.disconnect();
         await this.connectSerial();
       }
@@ -525,6 +692,11 @@ export class ElevatorController {
       this.reconnectTimer = null;
     }
 
+    if (this.simulationTimer) {
+      clearInterval(this.simulationTimer);
+      this.simulationTimer = null;
+    }
+
     if (this.serialPort?.isOpen) {
       await new Promise<void>((resolve) => {
         this.serialPort!.close((error) => {
@@ -536,7 +708,35 @@ export class ElevatorController {
       });
     }
 
-    this.status.connectionStatus = "disconnected";
+    this.status.connectionStatus = this.simulationMode
+      ? "simulation"
+      : "disconnected";
     console.log("✅ Elevator Controller disconnected");
+  }
+
+  // 疑似モード制御メソッド
+  isSimulationMode(): boolean {
+    return this.simulationMode;
+  }
+
+  enableSimulationMode(): void {
+    if (!this.simulationMode) {
+      this.simulationMode = true;
+      this.status.connectionStatus = "simulation";
+      this.startSimulation();
+      console.log("🎭 Simulation mode enabled");
+    }
+  }
+
+  disableSimulationMode(): void {
+    if (this.simulationMode) {
+      this.simulationMode = false;
+      if (this.simulationTimer) {
+        clearInterval(this.simulationTimer);
+        this.simulationTimer = null;
+      }
+      this.status.connectionStatus = "disconnected";
+      console.log("🔌 Simulation mode disabled");
+    }
   }
 }
