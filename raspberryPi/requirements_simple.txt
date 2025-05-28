@@ -1,0 +1,5 @@
+# Raspberry Pi 4B シリアル受信プログラム用依存関係
+# Python 3.7+ required
+
+# シリアル通信
+pyserial>=3.5

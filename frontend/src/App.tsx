@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import ElevatorPanel from "./components/ElevatorPanel";
 import StatusMonitor from "./components/StatusMonitor";
 import CommunicationLogs from "./components/CommunicationLogs";
+import ElevatorAnimation from "./components/ElevatorAnimation";
 import "./App.css";
 
 // 型定義
@@ -203,19 +204,32 @@ const App: React.FC = () => {
       </header>
 
       <main className="app-main">
-        <div className="left-panel">
-          <ElevatorPanel
-            status={status}
-            onFloorSelect={handleFloorSelect}
-            onDoorControl={handleDoorControl}
-            onWeightSet={handleWeightSet}
-          />
+        <div className="top-section">
+          <div className="top-left">
+            <ElevatorPanel
+              status={status}
+              onFloorSelect={handleFloorSelect}
+              onDoorControl={handleDoorControl}
+              onWeightSet={handleWeightSet}
+            />
+          </div>
 
-          <StatusMonitor status={status} connectionStatus={connectionStatus} />
+          <div className="top-right">
+            <ElevatorAnimation status={status} />
+          </div>
         </div>
 
-        <div className="right-panel">
-          <CommunicationLogs logs={logs} />
+        <div className="bottom-section">
+          <div className="bottom-left">
+            <StatusMonitor
+              status={status}
+              connectionStatus={connectionStatus}
+            />
+          </div>
+
+          <div className="bottom-right">
+            <CommunicationLogs logs={logs} />
+          </div>
         </div>
       </main>
     </div>

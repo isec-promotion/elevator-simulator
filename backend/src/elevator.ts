@@ -1,5 +1,23 @@
 import { SerialPort } from "serialport";
 
+/**
+ * シリアルポートの設定
+ * 実際の環境に応じて変更してください
+ */
+const SERIAL_PORT = "COM27"; // Windowsの場合
+// const SERIAL_PORT = "/dev/ttyUSB0"; // Linuxの場合
+
+// エレベーター動作時間設定（ミリ秒）
+export const ELEVATOR_TIMING = {
+  FLOOR_MOVEMENT_TIME: 3000, // エレベーター移動時間（3秒）
+  DOOR_OPERATION_TIME: 2000, // 扉開閉時間（2秒）
+  COMMAND_RESPONSE_DELAY: 100, // コマンド応答遅延（0.1秒）
+  // 高速モード用
+  // FLOOR_MOVEMENT_TIME: 500, // 0.5秒
+  // DOOR_OPERATION_TIME: 300, // 0.3秒
+  // COMMAND_RESPONSE_DELAY: 10, // 0.01秒
+} as const;
+
 // 型定義
 export interface ElevatorStatus {
   currentFloor: string | null;
@@ -40,6 +58,7 @@ export enum ElevatorCommands {
   CURRENT_FLOOR = 0x0001,
   TARGET_FLOOR = 0x0002,
   LOAD_WEIGHT = 0x0003,
+  DOOR_STATUS = 0x0004,
   FLOOR_SETTING = 0x0010,
   DOOR_CONTROL = 0x0011,
 }
@@ -63,7 +82,7 @@ export class ElevatorController {
   constructor(simulationMode: boolean = false) {
     this.simulationMode = simulationMode;
     this.config = {
-      serialPort: "COM1", // デフォルト値、実際の環境に応じて変更
+      serialPort: SERIAL_PORT, // シリアルポートの設定
       baudRate: 9600,
       dataBits: 8,
       parity: "even",
@@ -93,14 +112,14 @@ export class ElevatorController {
     this.status.currentFloor = "1F";
     this.status.doorStatus = "closed";
     this.status.loadWeight = 0;
-    this.status.connectionStatus = "connected"; // RS422接続中として表示
+    this.status.connectionStatus = "simulation"; // シミュレーションモードとして表示
     this.status.lastCommunication = new Date().toISOString();
 
     this.addLog(
       "system",
       "Simulation mode started",
       "success",
-      "疑似モード: RS422接続中"
+      "疑似モード: シミュレーション開始"
     );
   }
 
@@ -163,10 +182,16 @@ export class ElevatorController {
         stopBits: this.config.stopBits,
       });
 
-      this.serialPort.on("open", () => {
+      this.serialPort.on("open", async () => {
         console.log(`✅ Serial port ${this.config.serialPort} opened`);
         this.status.connectionStatus = "connected";
         this.addLog("system", "Serial port opened", "success");
+
+        // 実際のシリアル通信では、初期状態で扉を閉じる
+        setTimeout(async () => {
+          console.log("🔧 Initializing door state...");
+          await this.controlDoor("close");
+        }, 1000); // 1秒後に扉を閉じる
       });
 
       this.serialPort.on("data", (data) => {
@@ -332,8 +357,10 @@ export class ElevatorController {
 
       this.addLog("send", hexData, "success", `${readableData} (疑似モード)`);
 
-      // 疑似的な応答遅延
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      // 疑似的な応答遅延（定数を使用）
+      await new Promise((resolve) =>
+        setTimeout(resolve, ELEVATOR_TIMING.COMMAND_RESPONSE_DELAY)
+      );
 
       return { success: true, data: { simulation: true } };
     }
@@ -472,6 +499,24 @@ export class ElevatorController {
       case ElevatorCommands.LOAD_WEIGHT:
         this.status.loadWeight = dataValue;
         break;
+      case ElevatorCommands.DOOR_STATUS:
+        this.status.doorStatus = this.decodeDoorStatus(dataValue);
+        break;
+    }
+  }
+
+  private decodeDoorStatus(doorData: number): ElevatorStatus["doorStatus"] {
+    switch (doorData) {
+      case 0x0000:
+        return "closed";
+      case 0x0001:
+        return "open";
+      case 0x0002:
+        return "opening";
+      case 0x0003:
+        return "closing";
+      default:
+        return "unknown";
     }
   }
 
@@ -555,7 +600,7 @@ export class ElevatorController {
       this.status.targetFloor = floor;
       this.status.isMoving = true;
 
-      // シミュレーション: 3秒後に移動完了
+      // シミュレーション: 定数で設定された時間後に移動完了
       setTimeout(() => {
         this.status.currentFloor = floor;
         this.status.isMoving = false;
@@ -565,7 +610,7 @@ export class ElevatorController {
           "success",
           `疑似モード: ${floor}に移動完了`
         );
-      }, 3000);
+      }, ELEVATOR_TIMING.FLOOR_MOVEMENT_TIME);
     }
 
     return result;
@@ -599,7 +644,7 @@ export class ElevatorController {
     if (result.success) {
       this.status.doorStatus = newStatus;
 
-      // シミュレーション: 2秒後に動作完了
+      // シミュレーション: 定数で設定された時間後に動作完了
       if (action !== "stop") {
         setTimeout(() => {
           this.status.doorStatus = action === "open" ? "open" : "closed";
@@ -609,7 +654,7 @@ export class ElevatorController {
             "success",
             `疑似モード: ドア${action === "open" ? "開" : "閉"}完了`
           );
-        }, 2000);
+        }, ELEVATOR_TIMING.DOOR_OPERATION_TIME);
       }
     }
 

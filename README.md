@@ -136,9 +136,15 @@ npm run preview
 `backend/src/elevator.ts` でシリアルポートの設定を変更できます：
 
 ```typescript
+/**
+ * シリアルポートの設定
+ * 実際の環境に応じて変更してください
+ */
+const SERIAL_PORT = "COM1"; // Windowsの場合
+// const SERIAL_PORT = "/dev/ttyUSB0"; // Linuxの場合
+
 this.config = {
-  serialPort: "COM1", // Windowsの場合
-  // serialPort: "/dev/ttyUSB0", // Linuxの場合
+  serialPort: SERIAL_PORT, // シリアルポートの設定
   baudRate: 9600,
   dataBits: 8,
   parity: "even",
@@ -146,6 +152,23 @@ this.config = {
   timeout: 3000,
   retryCount: 8,
 };
+```
+
+#### エレベーター速度設定
+
+`backend/src/elevator.ts` でエレベーター速度を変更できます：
+
+```typescript
+// エレベーター動作時間設定（ミリ秒）
+export const ELEVATOR_TIMING = {
+  FLOOR_MOVEMENT_TIME: 3000, // エレベーター移動時間（3秒）
+  DOOR_OPERATION_TIME: 2000, // 扉開閉時間（2秒）
+  COMMAND_RESPONSE_DELAY: 100, // コマンド応答遅延（0.1秒）
+  // 高速モード用
+  // FLOOR_MOVEMENT_TIME: 500, // 0.5秒
+  // DOOR_OPERATION_TIME: 300, // 0.3秒
+  // COMMAND_RESPONSE_DELAY: 10, // 0.01秒
+} as const;
 ```
 
 ### WebSocket 設定
@@ -197,6 +220,16 @@ ENQ + 局番号(4桁) + コマンド(1文字) + データ番号(4桁) + デー�
 - ポート番号の重複をチェック
 - デバイスドライバーの確認
 
+#### RS422 USB コンバーターの設定
+
+以下のように 5 線接続する。
+
+- T/R+ ⇔ RXD+
+- T/R- ⇔ RXD-
+- RXD+ ⇔ T/R+
+- RXD- ⇔ T/R-
+- GND ⇔ GND
+
 ### WebSocket 接続エラー
 
 - ファイアウォール設定の確認
@@ -221,6 +254,6 @@ MIT License
 
 ---
 
-**開発者**: SEC-3000H エレベーターシミュレーター開発チーム  
+**開発者**: アイゼック株式会社
 **バージョン**: 1.0.0  
 **最終更新**: 2025 年 5 月 27 日
