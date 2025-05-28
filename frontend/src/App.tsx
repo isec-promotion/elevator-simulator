@@ -3,6 +3,11 @@ import ElevatorPanel from "./components/ElevatorPanel";
 import StatusMonitor from "./components/StatusMonitor";
 import CommunicationLogs from "./components/CommunicationLogs";
 import ElevatorAnimation from "./components/ElevatorAnimation";
+import AutoModePanel, {
+  AutoModeStatus,
+  AutoModeLog,
+  AutoModeConfig,
+} from "./components/AutoModePanel";
 import "./App.css";
 
 // 型定義
@@ -46,6 +51,13 @@ const App: React.FC = () => {
     "connecting" | "connected" | "disconnected" | "error"
   >("disconnected");
 
+  // 自動運転モード関連の状態
+  const [autoModeStatus, setAutoModeStatus] = useState<AutoModeStatus | null>(
+    null
+  );
+  const [autoModeLogs, setAutoModeLogs] = useState<AutoModeLog[]>([]);
+  const [isAutoModeEnabled, setIsAutoModeEnabled] = useState<boolean>(false);
+
   // WebSocket接続
   useEffect(() => {
     const connectWebSocket = () => {
@@ -61,6 +73,9 @@ const App: React.FC = () => {
           // 初期状態を要求
           ws.send(JSON.stringify({ type: "getStatus" }));
           ws.send(JSON.stringify({ type: "getLogs" }));
+
+          // 自動運転モードの状態を確認
+          checkAutoModeStatus();
         };
 
         ws.onmessage = (event) => {
@@ -160,6 +175,106 @@ const App: React.FC = () => {
     });
   };
 
+  // 自動運転モード関連の関数
+  const checkAutoModeStatus = async () => {
+    try {
+      const response = await fetch("http://localhost:3000/api/auto/status");
+      if (response.ok) {
+        const data = await response.json();
+        setAutoModeStatus(data.autoMode);
+        setIsAutoModeEnabled(true);
+
+        // 自動運転ログも取得
+        const logsResponse = await fetch("http://localhost:3000/api/auto/logs");
+        if (logsResponse.ok) {
+          const logsData = await logsResponse.json();
+          setAutoModeLogs(logsData);
+        }
+      } else {
+        setIsAutoModeEnabled(false);
+      }
+    } catch (error) {
+      console.log("Auto mode not available:", error);
+      setIsAutoModeEnabled(false);
+    }
+  };
+
+  const handleStartAutoMode = async () => {
+    try {
+      const response = await fetch("http://localhost:3000/api/auto/start", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setAutoModeStatus(data.data);
+        console.log("Auto mode started:", data.message);
+      } else {
+        const errorData = await response.json();
+        console.error("Failed to start auto mode:", errorData.error);
+        alert(
+          `自動運転開始に失敗しました: ${errorData.message || errorData.error}`
+        );
+      }
+    } catch (error) {
+      console.error("Error starting auto mode:", error);
+      alert("自動運転開始中にエラーが発生しました");
+    }
+  };
+
+  const handleStopAutoMode = async () => {
+    try {
+      const response = await fetch("http://localhost:3000/api/auto/stop", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setAutoModeStatus(data.data);
+        console.log("Auto mode stopped:", data.message);
+      } else {
+        const errorData = await response.json();
+        console.error("Failed to stop auto mode:", errorData.error);
+        alert(`自動運転停止に失敗しました: ${errorData.error}`);
+      }
+    } catch (error) {
+      console.error("Error stopping auto mode:", error);
+      alert("自動運転停止中にエラーが発生しました");
+    }
+  };
+
+  const handleUpdateAutoConfig = async (config: Partial<AutoModeConfig>) => {
+    try {
+      const response = await fetch("http://localhost:3000/api/auto/config", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(config),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        console.log("Auto mode config updated:", data.message);
+        // 設定更新後、状態を再取得
+        await checkAutoModeStatus();
+      } else {
+        const errorData = await response.json();
+        console.error("Failed to update auto mode config:", errorData.error);
+        alert(`設定更新に失敗しました: ${errorData.error}`);
+      }
+    } catch (error) {
+      console.error("Error updating auto mode config:", error);
+      alert("設定更新中にエラーが発生しました");
+    }
+  };
+
   const getConnectionStatusColor = () => {
     switch (connectionStatus) {
       case "connected":
@@ -224,6 +339,14 @@ const App: React.FC = () => {
             <StatusMonitor
               status={status}
               connectionStatus={connectionStatus}
+            />
+            <AutoModePanel
+              autoModeStatus={autoModeStatus}
+              autoModeLogs={autoModeLogs}
+              onStartAutoMode={handleStartAutoMode}
+              onStopAutoMode={handleStopAutoMode}
+              onUpdateConfig={handleUpdateAutoConfig}
+              isAutoModeEnabled={isAutoModeEnabled}
             />
           </div>
 

@@ -5,6 +5,7 @@ import { WebSocketServer } from "ws";
 import { createServer } from "http";
 import { ElevatorController } from "./elevator.js";
 import { WebSocketHandler } from "./websocket.js";
+import { AutoModeController } from "./autoMode.js";
 
 const app = new Hono();
 
@@ -23,14 +24,25 @@ const simulationMode =
   process.argv.includes("--simulation") ||
   process.argv.includes("--sim");
 
+// 自動運転モードの判定
+const autoMode =
+  process.env.AUTO_MODE === "true" || process.argv.includes("--auto");
+
 if (simulationMode) {
   console.log("🎭 Starting in simulation mode");
 } else {
   console.log("🔌 Starting in normal mode");
 }
 
+if (autoMode) {
+  console.log("🤖 Auto mode enabled");
+}
+
 // エレベーター制御インスタンス
 const elevatorController = new ElevatorController(simulationMode);
+
+// 自動運転制御インスタンス
+const autoModeController = new AutoModeController(elevatorController);
 
 // ヘルスチェック
 app.get("/health", (c) => {
@@ -49,6 +61,17 @@ app.get("/api/elevator/status", (c) => {
 // 階数設定API
 app.post("/api/elevator/floor", async (c) => {
   try {
+    // 自動運転モードが有効な場合は手動操作を拒否
+    if (autoModeController.isEnabled()) {
+      return c.json(
+        {
+          error: "Manual operation is disabled during auto mode",
+          message: "自動運転モード中は手動操作できません",
+        },
+        403
+      );
+    }
+
     const { floor } = await c.req.json();
 
     if (!floor || typeof floor !== "string") {
@@ -81,6 +104,17 @@ app.post("/api/elevator/floor", async (c) => {
 // 扉制御API
 app.post("/api/elevator/door", async (c) => {
   try {
+    // 自動運転モードが有効な場合は手動操作を拒否
+    if (autoModeController.isEnabled()) {
+      return c.json(
+        {
+          error: "Manual operation is disabled during auto mode",
+          message: "自動運転モード中は手動操作できません",
+        },
+        403
+      );
+    }
+
     const { action } = await c.req.json();
 
     if (!action || !["open", "close", "stop"].includes(action)) {
@@ -174,6 +208,73 @@ app.post("/api/elevator/config", async (c) => {
   }
 });
 
+// 自動運転モード状態取得API
+app.get("/api/auto/status", (c) => {
+  return c.json({
+    autoMode: autoModeController.getStatus(),
+    elevator: elevatorController.getStatus(),
+  });
+});
+
+// 自動運転モード開始API
+app.post("/api/auto/start", async (c) => {
+  try {
+    // 自動運転モードが有効でない場合は手動操作を無効化
+    if (autoModeController.isEnabled()) {
+      return c.json({ error: "Auto mode is already running" }, 400);
+    }
+
+    await autoModeController.start();
+
+    return c.json({
+      success: true,
+      message: "Auto mode started",
+      data: autoModeController.getStatus(),
+    });
+  } catch (error) {
+    console.error("Auto mode start error:", error);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
+// 自動運転モード停止API
+app.post("/api/auto/stop", async (c) => {
+  try {
+    await autoModeController.stop();
+
+    return c.json({
+      success: true,
+      message: "Auto mode stopped",
+      data: autoModeController.getStatus(),
+    });
+  } catch (error) {
+    console.error("Auto mode stop error:", error);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
+// 自動運転ログ取得API
+app.get("/api/auto/logs", (c) => {
+  return c.json(autoModeController.getAutoLogs());
+});
+
+// 自動運転設定更新API
+app.post("/api/auto/config", async (c) => {
+  try {
+    const config = await c.req.json();
+    autoModeController.updateConfig(config);
+
+    return c.json({
+      success: true,
+      message: "Auto mode configuration updated",
+      data: autoModeController.getConfig(),
+    });
+  } catch (error) {
+    console.error("Auto mode config update error:", error);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
 // 404ハンドラー
 app.notFound((c) => {
   return c.json({ error: "Not Found" }, 404);
@@ -210,42 +311,76 @@ console.log(`🏗️  Frontend should be running on http://localhost:5173`);
 // エレベーター制御システム初期化
 elevatorController
   .initialize()
-  .then(() => {
+  .then(async () => {
     console.log("✅ Elevator Controller initialized");
+
+    // 自動運転モードが有効な場合は自動開始
+    if (autoMode) {
+      console.log("🤖 Starting auto mode automatically...");
+      try {
+        await autoModeController.start();
+        console.log("✅ Auto mode started automatically");
+      } catch (error) {
+        console.error("❌ Failed to start auto mode:", error);
+      }
+    }
   })
   .catch((error) => {
     console.error("❌ Elevator Controller initialization failed:", error);
   });
 
 // グレースフルシャットダウン
-process.on("SIGINT", async () => {
-  console.log("\n🛑 Shutting down server...");
+const gracefulShutdown = async (signal: string) => {
+  console.log(`\n🛑 Received ${signal}, shutting down gracefully...`);
 
   try {
+    // 自動運転モードを停止
+    if (autoModeController.isEnabled()) {
+      console.log("🛑 Stopping auto mode...");
+      await autoModeController.stop();
+      console.log("✅ Auto mode stopped");
+    }
+
+    // エレベーターコントローラーを切断
+    console.log("🛑 Disconnecting elevator controller...");
     await elevatorController.disconnect();
     console.log("✅ Elevator Controller disconnected");
+
+    // WebSocketサーバーを閉じる
+    console.log("🛑 Closing WebSocket server...");
+    wss.close(() => {
+      console.log("✅ WebSocket server closed");
+    });
+
+    // HTTPサーバーを閉じる
+    console.log("🛑 Closing HTTP server...");
+    server.close(() => {
+      console.log("✅ HTTP server closed");
+      console.log("👋 Goodbye!");
+      process.exit(0);
+    });
+
+    // 強制終了のタイムアウト（10秒）
+    setTimeout(() => {
+      console.error("❌ Forced shutdown after timeout");
+      process.exit(1);
+    }, 10000);
   } catch (error) {
     console.error("❌ Error during shutdown:", error);
+    process.exit(1);
   }
+};
 
-  server.close(() => {
-    console.log("✅ Server closed");
-    process.exit(0);
-  });
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+
+// 未処理の例外をキャッチ
+process.on("uncaughtException", (error) => {
+  console.error("❌ Uncaught Exception:", error);
+  gracefulShutdown("uncaughtException");
 });
 
-process.on("SIGTERM", async () => {
-  console.log("\n🛑 Received SIGTERM, shutting down gracefully...");
-
-  try {
-    await elevatorController.disconnect();
-    console.log("✅ Elevator Controller disconnected");
-  } catch (error) {
-    console.error("❌ Error during shutdown:", error);
-  }
-
-  server.close(() => {
-    console.log("✅ Server closed");
-    process.exit(0);
-  });
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("❌ Unhandled Rejection at:", promise, "reason:", reason);
+  gracefulShutdown("unhandledRejection");
 });

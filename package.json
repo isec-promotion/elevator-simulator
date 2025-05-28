@@ -1,0 +1,29 @@
+{
+  "name": "elevator-simulator",
+  "version": "1.0.0",
+  "description": "SEC-3000H Elevator Simulator with Auto Mode",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:auto": "concurrently \"npm run dev:backend:auto\" \"npm run dev:frontend:auto\"",
+    "dev:backend": "cd backend && npm run dev",
+    "dev:backend:auto": "cd backend && npm run dev:auto",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:frontend:auto": "cd frontend && npm run dev:auto",
+    "build": "npm run build:backend && npm run build:frontend",
+    "build:backend": "cd backend && npm run build",
+    "build:frontend": "cd frontend && npm run build",
+    "install:all": "npm install && cd backend && npm install && cd ../frontend && npm install"
+  },
+  "keywords": [
+    "elevator",
+    "simulator",
+    "auto-mode",
+    "sec-3000h"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

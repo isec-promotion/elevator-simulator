@@ -1,0 +1,349 @@
+.auto-mode-panel {
+  background: #f8f9fa;
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  padding: 16px;
+  margin: 8px 0;
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #dee2e6;
+}
+
+.panel-header h3 {
+  margin: 0;
+  color: #495057;
+  font-size: 1.2em;
+}
+
+.auto-mode-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9em;
+  font-weight: 500;
+}
+
+.status-indicator {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.auto-mode-controls {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.control-button {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 6px;
+  font-size: 1em;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-width: 100px;
+}
+
+.control-button.start {
+  background: #28a745;
+  color: white;
+}
+
+.control-button.start:hover:not(:disabled) {
+  background: #218838;
+  transform: translateY(-1px);
+}
+
+.control-button.stop {
+  background: #dc3545;
+  color: white;
+}
+
+.control-button.stop:hover:not(:disabled) {
+  background: #c82333;
+  transform: translateY(-1px);
+}
+
+.control-button:disabled {
+  background: #6c757d;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.config-button {
+  padding: 10px 16px;
+  border: 1px solid #6c757d;
+  border-radius: 6px;
+  background: white;
+  color: #6c757d;
+  font-size: 1em;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.config-button:hover:not(:disabled) {
+  background: #6c757d;
+  color: white;
+  transform: translateY(-1px);
+}
+
+.config-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.auto-mode-info {
+  background: white;
+  border: 1px solid #e9ecef;
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 16px;
+}
+
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0;
+}
+
+.info-row .label {
+  color: #6c757d;
+  font-size: 0.9em;
+}
+
+.info-row .value {
+  font-weight: 600;
+  color: #495057;
+}
+
+.config-panel {
+  background: white;
+  border: 1px solid #e9ecef;
+  border-radius: 6px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.config-panel h4 {
+  margin: 0 0 16px 0;
+  color: #495057;
+  font-size: 1.1em;
+}
+
+.config-group {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.config-group label {
+  color: #6c757d;
+  font-size: 0.9em;
+  font-weight: 500;
+}
+
+.config-group input {
+  width: 80px;
+  padding: 6px 8px;
+  border: 1px solid #ced4da;
+  border-radius: 4px;
+  font-size: 0.9em;
+  text-align: center;
+}
+
+.config-group input:focus {
+  outline: none;
+  border-color: #007bff;
+  box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+}
+
+.config-buttons {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.apply-button {
+  padding: 8px 16px;
+  background: #007bff;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 0.9em;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.apply-button:hover {
+  background: #0056b3;
+}
+
+.cancel-button {
+  padding: 8px 16px;
+  background: #6c757d;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 0.9em;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.cancel-button:hover {
+  background: #545b62;
+}
+
+.auto-mode-logs {
+  background: white;
+  border: 1px solid #e9ecef;
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.auto-mode-logs h4 {
+  margin: 0 0 12px 0;
+  color: #495057;
+  font-size: 1em;
+}
+
+.logs-container {
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid #e9ecef;
+  border-radius: 4px;
+  background: #f8f9fa;
+}
+
+.no-logs {
+  padding: 16px;
+  text-align: center;
+  color: #6c757d;
+  font-style: italic;
+}
+
+.log-entry {
+  display: flex;
+  padding: 8px 12px;
+  border-bottom: 1px solid #e9ecef;
+  font-size: 0.85em;
+}
+
+.log-entry:last-child {
+  border-bottom: none;
+}
+
+.log-entry:hover {
+  background: #e9ecef;
+}
+
+.log-time {
+  min-width: 80px;
+  color: #6c757d;
+  font-family: monospace;
+  font-size: 0.8em;
+  margin-right: 12px;
+}
+
+.log-content {
+  flex: 1;
+}
+
+.log-floor {
+  font-weight: 600;
+  color: #007bff;
+  margin-bottom: 2px;
+}
+
+.log-action {
+  color: #495057;
+  margin-bottom: 2px;
+}
+
+.log-passengers {
+  color: #6c757d;
+  font-size: 0.9em;
+}
+
+.auto-mode-disabled {
+  text-align: center;
+  padding: 32px 16px;
+  color: #6c757d;
+}
+
+.auto-mode-disabled p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.auto-mode-disabled code {
+  background: #e9ecef;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-family: "Courier New", monospace;
+  color: #495057;
+  font-weight: 600;
+}
+
+/* レスポンシブ対応 */
+@media (max-width: 768px) {
+  .auto-mode-controls {
+    flex-direction: column;
+  }
+
+  .control-button,
+  .config-button {
+    width: 100%;
+  }
+
+  .config-group {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+
+  .config-group input {
+    width: 100%;
+    max-width: 120px;
+  }
+
+  .log-entry {
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .log-time {
+    min-width: auto;
+    margin-right: 0;
+  }
+}
+
+/* スクロールバーのスタイリング */
+.logs-container::-webkit-scrollbar {
+  width: 6px;
+}
+
+.logs-container::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 3px;
+}
+
+.logs-container::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 3px;
+}
+
+.logs-container::-webkit-scrollbar-thumb:hover {
+  background: #a8a8a8;
+}
