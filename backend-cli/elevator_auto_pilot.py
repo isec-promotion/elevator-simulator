@@ -61,10 +61,54 @@ class ElevatorState:
 # ── 自動運転シーケンス ─────────────────────────
 AUTO_SEQUENCE = ["B1F", "1F", "2F", "3F", "4F", "5F"]
 
+# ── 速度プリセット ─────────────────────────────
+SPEED_PRESETS = {
+    "fast": {
+        "name": "高速モード",
+        "description": "テスト用の高速動作",
+        "door_close_time": 3,      # 扉閉鎖時間
+        "movement_time": 5,        # 移動時間
+        "door_open_time": 3,       # 扉開放時間
+        "passenger_time": 5,       # 乗客出入り時間
+        "cycle_interval": 2,       # サイクル間隔
+        "status_interval": 30      # 状態表示間隔
+    },
+    "normal": {
+        "name": "標準モード",
+        "description": "通常の動作速度",
+        "door_close_time": 5,      # 扉閉鎖時間
+        "movement_time": 8,        # 移動時間
+        "door_open_time": 4,       # 扉開放時間
+        "passenger_time": 10,      # 乗客出入り時間
+        "cycle_interval": 5,       # サイクル間隔
+        "status_interval": 60      # 状態表示間隔
+    },
+    "slow": {
+        "name": "低速モード",
+        "description": "実際のエレベーターに近い動作",
+        "door_close_time": 8,      # 扉閉鎖時間
+        "movement_time": 15,       # 移動時間
+        "door_open_time": 6,       # 扉開放時間
+        "passenger_time": 20,      # 乗客出入り時間
+        "cycle_interval": 10,      # サイクル間隔
+        "status_interval": 120     # 状態表示間隔
+    },
+    "realistic": {
+        "name": "リアルモード",
+        "description": "実際のエレベーターと同等の動作",
+        "door_close_time": 10,     # 扉閉鎖時間
+        "movement_time": 25,       # 移動時間
+        "door_open_time": 8,       # 扉開放時間
+        "passenger_time": 30,      # 乗客出入り時間
+        "cycle_interval": 60,      # サイクル間隔（1分間隔）
+        "status_interval": 300     # 状態表示間隔（5分）
+    }
+}
+
 class ElevatorAutoPilot:
     """SEC-3000H エレベーター自動操縦クラス"""
     
-    def __init__(self):
+    def __init__(self, speed_mode: str = "normal"):
         self.serial_conn: Optional[serial.Serial] = None
         self.state = ElevatorState()
         self.sequence_index = 0
@@ -72,6 +116,11 @@ class ElevatorAutoPilot:
         self.status_broadcast_timer: Optional[threading.Timer] = None
         self.operation_timer: Optional[threading.Timer] = None
         self.lock = threading.Lock()
+        
+        # 速度設定
+        self.speed_mode = speed_mode
+        self.timing = SPEED_PRESETS.get(speed_mode, SPEED_PRESETS["normal"])
+        logger.info(f"🎛️ 動作モード: {self.timing['name']} - {self.timing['description']}")
 
     async def initialize(self):
         """初期化"""
@@ -302,16 +351,16 @@ class ElevatorAutoPilot:
             logger.info(f"\n🎯 次の目標階: {target_floor} (現在: {current_floor})")
 
             # 1. 扉を閉める
-            logger.info("🚪 扉を閉めています...")
+            logger.info(f"🚪 扉を閉めています...({self.timing['door_close_time']}秒)")
             await self._control_door("close")
-            await self._sleep(3)
+            await self._sleep(self.timing['door_close_time'])
 
             # 2. 目標階に移動
-            logger.info(f"🚀 {target_floor}に移動中...")
+            logger.info(f"🚀 {target_floor}に移動中...({self.timing['movement_time']}秒)")
             with self.lock:
                 self.state.is_moving = True
             await self._set_floor(target_floor)
-            await self._sleep(5)  # 移動時間
+            await self._sleep(self.timing['movement_time'])  # 移動時間
 
             # 3. 到着
             logger.info(f"✅ {target_floor}に到着")
@@ -320,27 +369,30 @@ class ElevatorAutoPilot:
                 self.state.is_moving = False
 
             # 4. 扉を開ける
-            logger.info("🚪 扉を開いています...")
+            logger.info(f"🚪 扉を開いています...({self.timing['door_open_time']}秒)")
             await self._control_door("open")
-            await self._sleep(3)
+            await self._sleep(self.timing['door_open_time'])
 
             # 5. 乗客の出入り時間
-            logger.info("👥 乗客の出入り中...")
-            await self._sleep(5)
+            logger.info(f"👥 乗客の出入り中...({self.timing['passenger_time']}秒)")
+            await self._sleep(self.timing['passenger_time'])
 
             # 次の階へ
             self.sequence_index = (self.sequence_index + 1) % len(AUTO_SEQUENCE)
 
             # 次のサイクルをスケジュール
             if self.is_running:
-                self.operation_timer = threading.Timer(2.0, lambda: self._run_async(self._execute_auto_pilot_loop()))
+                cycle_interval = self.timing['cycle_interval']
+                logger.info(f"⏳ 次のサイクルまで {cycle_interval}秒待機...")
+                self.operation_timer = threading.Timer(cycle_interval, lambda: self._run_async(self._execute_auto_pilot_loop()))
                 self.operation_timer.start()
 
         except Exception as e:
             logger.error(f"❌ 自動運転エラー: {e}")
             # エラー時は少し待ってから再試行
             if self.is_running:
-                self.operation_timer = threading.Timer(5.0, lambda: self._run_async(self._execute_auto_pilot_loop()))
+                retry_interval = max(self.timing['cycle_interval'], 5)
+                self.operation_timer = threading.Timer(retry_interval, lambda: self._run_async(self._execute_auto_pilot_loop()))
                 self.operation_timer.start()
 
     def stop_auto_pilot(self):
@@ -375,7 +427,8 @@ class ElevatorAutoPilot:
         def _status_timer():
             if self.is_running:
                 self._display_status()
-                self.status_broadcast_timer = threading.Timer(30.0, _status_timer)
+                interval = self.timing['status_interval']
+                self.status_broadcast_timer = threading.Timer(interval, _status_timer)
                 self.status_broadcast_timer.start()
 
         _status_timer()
@@ -418,7 +471,26 @@ class ElevatorAutoPilot:
 # ── メイン処理 ─────────────────────────────────
 async def main():
     """メイン処理"""
-    auto_pilot = ElevatorAutoPilot()
+    import argparse
+    
+    # コマンドライン引数解析
+    parser = argparse.ArgumentParser(description='SEC-3000H Elevator Auto Pilot CLI (Python版)')
+    parser.add_argument('--speed', choices=['fast', 'normal', 'slow', 'realistic'], 
+                       default='normal', help='動作速度モード (デフォルト: normal)')
+    parser.add_argument('--list-speeds', action='store_true', help='利用可能な速度モードを表示')
+    args = parser.parse_args()
+    
+    # 速度モード一覧表示
+    if args.list_speeds:
+        logger.info("📋 利用可能な速度モード:")
+        for mode, config in SPEED_PRESETS.items():
+            logger.info(f"  {mode}: {config['name']} - {config['description']}")
+            logger.info(f"    扉閉鎖:{config['door_close_time']}s, 移動:{config['movement_time']}s, "
+                       f"扉開放:{config['door_open_time']}s, 乗客:{config['passenger_time']}s, "
+                       f"サイクル間隔:{config['cycle_interval']}s")
+        return
+    
+    auto_pilot = ElevatorAutoPilot(speed_mode=args.speed)
 
     # シグナルハンドラー設定
     def signal_handler(signum, frame):
