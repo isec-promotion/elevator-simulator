@@ -698,6 +698,10 @@ export class ElevatorController {
       clearInterval(this.statusBroadcastTimer);
     }
 
+    // 自動運転モードかどうかをチェック
+    const isAutoMode = process.env.AUTO_MODE === "true";
+    const broadcastInterval = isAutoMode ? 500 : 1000; // 自動運転モード時は0.5秒間隔
+
     // SEC-3000H仕様書に従い、データ番号0001〜0003を順次送信
     let currentDataIndex = 0;
     const dataSequence = [
@@ -736,9 +740,11 @@ export class ElevatorController {
       } catch (error) {
         console.error("❌ Status broadcast error:", error);
       }
-    }, 1000); // 1秒間隔で送信
+    }, broadcastInterval);
 
-    console.log("📡 Status broadcast started");
+    console.log(
+      `📡 Status broadcast started (間隔: ${broadcastInterval}ms, 自動運転モード: ${isAutoMode})`
+    );
   }
 
   /**

@@ -5,6 +5,19 @@ import {
   ELEVATOR_TIMING,
 } from "./elevator.js";
 
+// 自動運転モードのタイムアウト設定（ミリ秒）
+export const AUTO_MODE_TIMING = {
+  MOVEMENT_TIMEOUT: 15000, // 階移動完了待機時間（15秒）
+  DOOR_OPERATION_TIMEOUT: 10000, // ドア開閉完了待機時間（10秒）
+  OPERATION_INTERVAL: 15000, // 運転間隔（15秒）
+  DOOR_OPEN_TIME: 5000, // ドア開放時間（5秒）
+  // 高速モード用
+  // MOVEMENT_TIMEOUT: 5000, // 階移動完了待機時間（5秒）
+  // DOOR_OPERATION_TIMEOUT: 3000, // ドア開閉完了待機時間（3秒）
+  // OPERATION_INTERVAL: 5000, // 運転間隔（5秒）
+  // DOOR_OPEN_TIME: 3000, // ドア開放時間（3秒）
+} as const;
+
 /**
  * 自動運転モード設定
  */
@@ -65,8 +78,8 @@ export class AutoModeController {
         min: "B1F",
         max: "5F",
       },
-      operationInterval: 10000, // 10秒間隔
-      doorOpenTime: 5000, // 5秒間ドア開放
+      operationInterval: AUTO_MODE_TIMING.OPERATION_INTERVAL, // 運転間隔
+      doorOpenTime: AUTO_MODE_TIMING.DOOR_OPEN_TIME, // ドア開放時間
     };
 
     // 運転対象階を初期化
@@ -107,15 +120,84 @@ export class AutoModeController {
       totalWeight: 0,
     });
 
-    // 初期位置を1Fに設定
-    const status = this.elevatorController.getStatus();
-    if (!status.currentFloor) {
-      await this.elevatorController.setWeight(0);
-      // 初期位置設定は手動で行う（実際のエレベーターでは現在位置を取得）
-    }
+    // 強制的に初期位置を1Fに設定
+    console.log("🏢 初期位置を1Fに設定しています...");
+    await this.initializeElevatorPosition();
 
     // 自動運転ループを開始
     this.startOperationLoop();
+  }
+
+  /**
+   * エレベーターの初期位置を1Fに設定
+   */
+  private async initializeElevatorPosition(): Promise<void> {
+    try {
+      // 荷重を0に設定
+      await this.elevatorController.setWeight(0);
+      console.log("✅ 荷重を0kgに設定しました");
+
+      // 現在の状態を取得
+      const currentStatus = this.elevatorController.getStatus();
+      console.log(
+        `📊 現在の状態: 階=${currentStatus.currentFloor}, ドア=${currentStatus.doorStatus}`
+      );
+
+      // シミュレーションモードの場合は直接状態を設定
+      if (this.elevatorController.isSimulationMode()) {
+        // シミュレーションモードでは内部状態を直接更新
+        console.log("🎭 シミュレーションモード: 1Fに強制設定");
+
+        // エレベーターコントローラーの内部状態を更新するため、
+        // 一度setFloorを呼び出して1Fに設定
+        const result = await this.elevatorController.setFloor("1F");
+        if (result.success) {
+          // 移動完了まで待機
+          await this.waitForMovementComplete("1F");
+          console.log("✅ 初期位置を1Fに設定完了");
+        } else {
+          console.warn("⚠️ 初期位置設定に失敗しましたが、続行します");
+        }
+      } else {
+        // 実機モードの場合は実際に1Fに移動
+        console.log("🔧 実機モード: 1Fに移動中...");
+
+        // ドアが開いている場合は閉める
+        if (
+          currentStatus.doorStatus === "open" ||
+          currentStatus.doorStatus === "opening"
+        ) {
+          console.log("🚪 ドアを閉めています...");
+          await this.elevatorController.controlDoor("close");
+          await this.waitForDoorClose();
+        }
+
+        // 1Fに移動
+        const result = await this.elevatorController.setFloor("1F");
+        if (result.success) {
+          await this.waitForMovementComplete("1F");
+          console.log("✅ 初期位置を1Fに設定完了");
+        } else {
+          console.warn("⚠️ 初期位置設定に失敗しましたが、続行します");
+        }
+      }
+
+      // 乗客数をリセット
+      this.currentPassengers = 0;
+
+      this.addAutoLog("システム", "初期位置設定完了", {
+        entering: 0,
+        exiting: 0,
+        totalWeight: 0,
+      });
+    } catch (error) {
+      console.error("❌ 初期位置設定エラー:", error);
+      this.addAutoLog("エラー", `初期位置設定エラー: ${error}`, {
+        entering: 0,
+        exiting: 0,
+        totalWeight: 0,
+      });
+    }
   }
 
   /**
@@ -178,17 +260,14 @@ export class AutoModeController {
     const targetFloor = this.getNextTargetFloor();
 
     console.log(`🎯 次の目標階: ${targetFloor} (現在: ${status.currentFloor})`);
+    console.log(`📊 現在のドア状態: ${status.doorStatus}`);
 
     // 目標階に移動
     if (status.currentFloor !== targetFloor) {
       console.log(`🚀 ${targetFloor}に移動中...`);
 
-      // 扉が開いている場合は閉める
-      if (status.doorStatus === "open" || status.doorStatus === "opening") {
-        console.log("🚪 扉を閉めています...");
-        await this.elevatorController.controlDoor("close");
-        await this.waitForDoorClose();
-      }
+      // 扉の状態を確認し、必要に応じて閉める
+      await this.ensureDoorClosed();
 
       // 階移動
       const moveResult = await this.elevatorController.setFloor(targetFloor);
@@ -197,12 +276,59 @@ export class AutoModeController {
         await this.waitForMovementComplete(targetFloor);
       } else {
         console.error("❌ 階移動に失敗:", moveResult.error);
+        this.addAutoLog("エラー", `階移動失敗: ${moveResult.error}`, {
+          entering: 0,
+          exiting: 0,
+          totalWeight: 0,
+        });
         return;
       }
     }
 
     // 到着後の処理
     await this.handleFloorArrival(targetFloor);
+  }
+
+  /**
+   * ドアが確実に閉まっていることを確認
+   */
+  private async ensureDoorClosed(): Promise<void> {
+    const status = this.elevatorController.getStatus();
+
+    if (status.doorStatus === "closed") {
+      console.log("✅ ドアは既に閉まっています");
+      return;
+    }
+
+    if (status.doorStatus === "open" || status.doorStatus === "opening") {
+      console.log("🚪 ドアを閉めています...");
+      await this.elevatorController.controlDoor("close");
+      await this.waitForDoorClose();
+    } else if (status.doorStatus === "closing") {
+      console.log("🚪 ドアが閉まるまで待機中...");
+      await this.waitForDoorClose();
+    } else {
+      console.warn(
+        `⚠️ 不明なドア状態: ${status.doorStatus} - 強制的に閉扉コマンドを送信`
+      );
+      await this.elevatorController.controlDoor("close");
+      await this.waitForDoorClose();
+    }
+
+    // 最終確認
+    const finalStatus = this.elevatorController.getStatus();
+    if (finalStatus.doorStatus !== "closed") {
+      console.error(
+        `❌ ドアが閉まりませんでした。現在状態: ${finalStatus.doorStatus}`
+      );
+      this.addAutoLog("エラー", `ドア閉鎖失敗: ${finalStatus.doorStatus}`, {
+        entering: 0,
+        exiting: 0,
+        totalWeight: 0,
+      });
+    } else {
+      console.log("✅ ドア閉鎖確認完了");
+    }
   }
 
   /**
@@ -291,19 +417,25 @@ export class AutoModeController {
    */
   private async waitForMovementComplete(targetFloor: string): Promise<void> {
     return new Promise((resolve) => {
+      let timeoutCount = 0;
+      const maxTimeout = AUTO_MODE_TIMING.MOVEMENT_TIMEOUT;
+
       const checkInterval = setInterval(() => {
         const status = this.elevatorController.getStatus();
+        timeoutCount += 100;
+
         if (status.currentFloor === targetFloor && !status.isMoving) {
+          console.log(`✅ 移動完了: ${targetFloor} (${timeoutCount}ms)`);
+          clearInterval(checkInterval);
+          resolve();
+        } else if (timeoutCount >= maxTimeout) {
+          console.warn(
+            `⚠️ 移動タイムアウト: ${targetFloor} (${timeoutCount}ms)`
+          );
           clearInterval(checkInterval);
           resolve();
         }
       }, 100);
-
-      // タイムアウト設定
-      setTimeout(() => {
-        clearInterval(checkInterval);
-        resolve();
-      }, ELEVATOR_TIMING.FLOOR_MOVEMENT_TIME + 1000);
     });
   }
 
@@ -312,19 +444,25 @@ export class AutoModeController {
    */
   private async waitForDoorOpen(): Promise<void> {
     return new Promise((resolve) => {
+      let timeoutCount = 0;
+      const maxTimeout = AUTO_MODE_TIMING.DOOR_OPERATION_TIMEOUT;
+
       const checkInterval = setInterval(() => {
         const status = this.elevatorController.getStatus();
+        timeoutCount += 100;
+
         if (status.doorStatus === "open") {
+          console.log(`✅ ドア開放完了 (${timeoutCount}ms)`);
+          clearInterval(checkInterval);
+          resolve();
+        } else if (timeoutCount >= maxTimeout) {
+          console.warn(
+            `⚠️ ドア開放タイムアウト (${timeoutCount}ms) - 現在状態: ${status.doorStatus}`
+          );
           clearInterval(checkInterval);
           resolve();
         }
       }, 100);
-
-      // タイムアウト設定
-      setTimeout(() => {
-        clearInterval(checkInterval);
-        resolve();
-      }, ELEVATOR_TIMING.DOOR_OPERATION_TIME + 1000);
     });
   }
 
@@ -333,19 +471,25 @@ export class AutoModeController {
    */
   private async waitForDoorClose(): Promise<void> {
     return new Promise((resolve) => {
+      let timeoutCount = 0;
+      const maxTimeout = AUTO_MODE_TIMING.DOOR_OPERATION_TIMEOUT;
+
       const checkInterval = setInterval(() => {
         const status = this.elevatorController.getStatus();
+        timeoutCount += 100;
+
         if (status.doorStatus === "closed") {
+          console.log(`✅ ドア閉鎖完了 (${timeoutCount}ms)`);
+          clearInterval(checkInterval);
+          resolve();
+        } else if (timeoutCount >= maxTimeout) {
+          console.warn(
+            `⚠️ ドア閉鎖タイムアウト (${timeoutCount}ms) - 現在状態: ${status.doorStatus}`
+          );
           clearInterval(checkInterval);
           resolve();
         }
       }, 100);
-
-      // タイムアウト設定
-      setTimeout(() => {
-        clearInterval(checkInterval);
-        resolve();
-      }, ELEVATOR_TIMING.DOOR_OPERATION_TIME + 1000);
     });
   }
 
