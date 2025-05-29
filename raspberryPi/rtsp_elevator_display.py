@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Elevator Dashboard RTSP Server
-  - RS-422シリアルで受信した現在階・行先階情報
-    を可読メッセージでターミナル表示し、
-    同時にRTSPで時刻とともに配信
+SEC-3000H Elevator Display RTSP Server
+backend-cli専用 - エレベーター案内ディスプレイ
 """
 
 import serial
@@ -37,14 +35,19 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ── エレベーター受信クラス ───────────────────
-class AutoModeElevatorReceiver:
-    """RS-422メッセージを解析し、可読形式でターミナル表示"""
+class ElevatorDisplayReceiver:
+    """SEC-3000H エレベーター案内ディスプレイ用受信クラス"""
     def __init__(self, port: str, baudrate: int):
         self.port = port
         self.baudrate = baudrate
         self.serial_conn: Optional[serial.Serial] = None
         self.running = False
-        self.current_status = {'current_floor': '1F', 'target_floor': None}
+        self.current_status = {
+            'current_floor': '1F', 
+            'target_floor': None,
+            'is_moving': False,
+            'door_status': 'unknown'
+        }
         self.lock = threading.Lock()
         self.recv_buffer = b''
 
@@ -70,16 +73,13 @@ class AutoModeElevatorReceiver:
             # ENQ (0x05) を探す
             idx = self.recv_buffer.find(b'\x05')
             if idx < 0:
-                # ENQが見つからない場合、バッファをクリア
                 self.recv_buffer = b''
                 return
             
             if idx > 0:
-                # ENQより前のデータを削除
                 self.recv_buffer = self.recv_buffer[idx:]
             
             if len(self.recv_buffer) < 16:
-                # 完全なメッセージがない場合は待機
                 return
             
             # 16バイトのメッセージを抽出
@@ -117,7 +117,7 @@ class AutoModeElevatorReceiver:
     def handle_packet(self, data: bytes):
         """受信パケットを解析して状態を更新"""
         try:
-            if len(data) < 16 or data[0] != 0x05:  # ENQ
+            if len(data) < 16 or data[0] != 0x05:
                 return
             
             # メッセージ解析
@@ -127,18 +127,18 @@ class AutoModeElevatorReceiver:
             data_value = data[10:14].decode('ascii')
             checksum = data[14:16].decode('ascii')
             
-            # データ番号を整数に変換（16進数として解析）
+            # データ番号を整数に変換
             data_num_int = int(data_num, 16)
             data_value_int = int(data_value, 16)
             
             # 人間が読める形式でメッセージをフォーマット
             description = self.format_readable_message(data_num_int, data_value_int)
             
-            # ログ出力（auto_mode_receiver.pyと同じ形式）
+            # ログ出力
             readable_msg = f"ENQ(05) 局番号:{station} CMD:{command} {description} データ:{data_value} チェックサム:{checksum}"
             logger.info(f"📨 受信: {readable_msg}")
             
-            # ACK応答送信（auto_mode_receiver.pyと同じ）
+            # ACK応答送信
             self.send_response(station, True)
             
             # 状態更新
@@ -148,7 +148,8 @@ class AutoModeElevatorReceiver:
             with self.lock:
                 cur = self.current_status['current_floor']
                 tgt = self.current_status['target_floor'] or '-'
-            logger.info(f"===== Status: 現在階={cur} 行先階={tgt} =====")
+                moving = "移動中" if self.current_status['is_moving'] else "停止中"
+            logger.info(f"===== Status: 現在階={cur} 行先階={tgt} 状態={moving} =====")
             
         except Exception as e:
             logger.error(f"❌ メッセージ解析エラー: {e}")
@@ -161,7 +162,7 @@ class AutoModeElevatorReceiver:
             
             # ACK/NAK応答作成
             response = bytearray()
-            response.append(0x06 if is_ack else 0x15)  # ACK or NAK
+            response.append(0x06 if is_ack else 0x15)
             response.extend(station.encode('ascii'))
             
             self.serial_conn.write(response)
@@ -198,19 +199,6 @@ class AutoModeElevatorReceiver:
             else:
                 door_action = "不明"
             description = f"扉制御: {door_action}"
-        elif data_num == 0x0016:  # 階数設定（自動運転モード）
-            floor_name = "B1F" if data_value == 0xFFFF else f"{data_value}F"
-            description = f"階数設定: {floor_name}"
-        elif data_num == 0x0017:  # 扉制御（自動運転モード）
-            if data_value == 0x0001:
-                door_action = "開扉"
-            elif data_value == 0x0002:
-                door_action = "閉扉"
-            elif data_value == 0x0000:
-                door_action = "停止"
-            else:
-                door_action = "不明"
-            description = f"扉制御: {door_action}"
         else:
             description = f"データ番号: {data_num:04X}"
         
@@ -221,58 +209,104 @@ class AutoModeElevatorReceiver:
         with self.lock:
             if data_num == 0x0001:  # 現在階数（エレベーターからの状態報告）
                 floor_name = "B1F" if data_value == 0xFFFF else f"{data_value}F"
-                # 現在階が変わった場合、行先階をクリア（到着完了）
-                if self.current_status.get('current_floor') != floor_name:
+                old_floor = self.current_status.get('current_floor')
+                
+                # 現在階が変わった場合、移動完了
+                if old_floor != floor_name:
                     self.current_status['target_floor'] = None
-                    logger.info(f"🏢 到着完了: {floor_name} (行先階クリア)")
+                    self.current_status['is_moving'] = False
+                    logger.info(f"🏢 現在階更新: {old_floor} → {floor_name} (移動完了)")
+                
+                # 現在階を常に更新
                 self.current_status['current_floor'] = floor_name
-                logger.info(f"🏢 現在階数を更新: {floor_name} (データ値: {data_value:04X})")
+                logger.info(f"📍 現在階確定: {floor_name}")
+                
             elif data_num == 0x0002:  # 行先階（エレベーターからの状態報告）
                 floor_name = "B1F" if data_value == 0xFFFF else f"{data_value}F"
                 self.current_status['target_floor'] = floor_name
-                logger.info(f"🎯 行先階を更新: {floor_name} (データ値: {data_value:04X})")
+                logger.info(f"🎯 行先階確定: {floor_name}")
+                
             elif data_num == 0x0010:  # 階数設定（移動指示）
                 floor_name = "B1F" if data_value == 0xFFFF else f"{data_value}F"
                 current_floor = self.current_status.get('current_floor')
                 
-                # 移動指示として行先階を設定
-                self.current_status['target_floor'] = floor_name
-                logger.info(f"🎯 移動指示: {current_floor} → {floor_name} (データ値: {data_value:04X})")
-            elif data_num == 0x0016:  # 階数設定（自動運転モード移動指示）
-                floor_name = "B1F" if data_value == 0xFFFF else f"{data_value}F"
-                current_floor = self.current_status.get('current_floor')
-                
-                # 移動指示として行先階を設定
-                self.current_status['target_floor'] = floor_name
-                logger.info(f"🎯 自動運転移動指示: {current_floor} → {floor_name} (データ値: {data_value:04X})")
+                # 現在階と異なる場合のみ移動指示として処理
+                if current_floor != floor_name:
+                    self.current_status['target_floor'] = floor_name
+                    self.current_status['is_moving'] = True
+                    logger.info(f"🎯 移動指示: {current_floor} → {floor_name}")
+                else:
+                    # 同じ階の場合は到着完了として処理
+                    self.current_status['target_floor'] = None
+                    self.current_status['is_moving'] = False
+                    logger.info(f"🏢 同一階設定により停止確定: {floor_name}")
+                    
             elif data_num == 0x0011:  # 扉制御
-                # 扉が開いた時、移動完了とみなして行先階をクリア
                 if data_value == 0x0001:  # 開扉
+                    self.current_status['door_status'] = 'opening'
+                    # 扉が開いた時、行先階があれば到着完了
                     target_floor = self.current_status.get('target_floor')
-                    if target_floor:
+                    if target_floor and self.current_status.get('is_moving'):
+                        old_floor = self.current_status.get('current_floor')
                         self.current_status['current_floor'] = target_floor
                         self.current_status['target_floor'] = None
-                        logger.info(f"🏢 扉開放により到着完了: {target_floor}")
-            elif data_num == 0x0017:  # 扉制御（自動運転モード）
-                # 扉が開いた時、移動完了とみなして行先階をクリア
-                if data_value == 0x0001:  # 開扉
-                    target_floor = self.current_status.get('target_floor')
-                    if target_floor:
-                        self.current_status['current_floor'] = target_floor
-                        self.current_status['target_floor'] = None
-                        logger.info(f"🏢 自動運転扉開放により到着完了: {target_floor}")
+                        self.current_status['is_moving'] = False
+                        logger.info(f"🏢 扉開放により到着完了: {old_floor} → {target_floor}")
+                    else:
+                        logger.info(f"🚪 扉開放: 現在階={self.current_status.get('current_floor')}")
+                        
+                elif data_value == 0x0002:  # 閉扉
+                    self.current_status['door_status'] = 'closing'
+                    logger.info(f"🚪 扉閉鎖: 現在階={self.current_status.get('current_floor')}")
+                else:
+                    self.current_status['door_status'] = 'unknown'
 
     def listen(self):
         logger.info("🎧 シリアル受信開始...")
         while self.running:
-            if self.serial_conn and self.serial_conn.in_waiting:
-                chunk = self.serial_conn.read(self.serial_conn.in_waiting)
-                self.recv_buffer += chunk
-                self.process_buffer()
+            try:
+                if self.serial_conn and self.serial_conn.is_open:
+                    if self.serial_conn.in_waiting > 0:
+                        chunk = self.serial_conn.read(self.serial_conn.in_waiting)
+                        if chunk:
+                            self.recv_buffer += chunk
+                            self.process_buffer()
+                else:
+                    # シリアルポートが切断された場合、再接続を試行
+                    logger.warning("⚠️ シリアルポート切断を検出、再接続を試行...")
+                    self.reconnect()
+                    
+            except Exception as e:
+                logger.error(f"❌ シリアル受信エラー: {e}")
+                logger.info("🔄 シリアルポート再接続を試行...")
+                self.reconnect()
+                
             time.sleep(0.05)
 
+    def reconnect(self):
+        """シリアルポート再接続"""
+        try:
+            if self.serial_conn and self.serial_conn.is_open:
+                self.serial_conn.close()
+            
+            # 少し待ってから再接続
+            time.sleep(2)
+            
+            if self.connect():
+                logger.info("✅ シリアルポート再接続成功")
+                # バッファをクリア
+                self.recv_buffer = b''
+            else:
+                logger.warning("⚠️ シリアルポート再接続失敗、5秒後に再試行...")
+                time.sleep(5)
+                
+        except Exception as e:
+            logger.error(f"❌ 再接続エラー: {e}")
+            time.sleep(5)
+
     def start(self):
-        if not self.connect(): sys.exit(1)
+        if not self.connect(): 
+            sys.exit(1)
         self.running = True
         threading.Thread(target=self.listen, daemon=True).start()
 
@@ -298,8 +332,8 @@ def pil_to_gst_buffer(img: Image.Image):
     buf.duration = Gst.util_uint64_scale_int(1, Gst.SECOND, FPS)
     return buf
 
-class AppSrcFactory(GstRtspServer.RTSPMediaFactory):
-    def __init__(self, receiver: AutoModeElevatorReceiver):
+class ElevatorDisplayFactory(GstRtspServer.RTSPMediaFactory):
+    def __init__(self, receiver: ElevatorDisplayReceiver):
         super().__init__()
         self.receiver = receiver
         self.set_shared(True)
@@ -311,33 +345,75 @@ class AppSrcFactory(GstRtspServer.RTSPMediaFactory):
             ' ! x264enc tune=zerolatency bitrate=500 speed-preset=ultrafast '
             ' ! rtph264pay name=pay0 pt=96 config-interval=1 )'
         )
+    
     def do_create_element(self, url):
         pipeline = Gst.parse_launch(self.launch_str)
         self.appsrc = pipeline.get_by_name('src')
         threading.Thread(target=self.push_frames, daemon=True).start()
         return pipeline
+    
     def push_frames(self):
         try:
-            font = ImageFont.truetype(FONT_PATH, 28)
+            font_large = ImageFont.truetype(FONT_PATH, 36)
+            font_medium = ImageFont.truetype(FONT_PATH, 28)
+            font_small = ImageFont.truetype(FONT_PATH, 20)
         except IOError:
-            font = ImageFont.load_default()
+            font_large = ImageFont.load_default()
+            font_medium = ImageFont.load_default()
+            font_small = ImageFont.load_default()
+        
         while True:
             img = Image.new('RGB', (WIDTH, HEIGHT), 'black')
             draw = ImageDraw.Draw(img)
+            
             with self.receiver.lock:
                 cur = self.receiver.current_status['current_floor']
                 tgt = self.receiver.current_status['target_floor']
-            header = "現在階　　　行先階" if tgt and tgt!=cur else "現在階"
-            body   = f"{cur}　⇒　{tgt}" if tgt and tgt!=cur else cur
-            bb = draw.textbbox((0,0), header, font=font)
-            draw.text(((WIDTH-bb[2])//2,10), header, font=font, fill='white')
-            bb2=draw.textbbox((0,0), body, font=font)
-            draw.text(((WIDTH-bb2[2])//2,10+bb[3]+5), body, font=font, fill='white')
-            now=datetime.now().strftime("%Y年%-m月%-d日 %H:%M:%S")
-            bb3=draw.textbbox((0,0), now, font=font)
-            draw.text(((WIDTH-bb3[2])//2,HEIGHT-bb3[3]-10), now, font=font, fill='white')
-            buf=pil_to_gst_buffer(img)
-            if self.appsrc.emit('push-buffer',buf)!=Gst.FlowReturn.OK: break
+                is_moving = self.receiver.current_status['is_moving']
+            
+            # エレベーター案内ディスプレイのレイアウト
+            if is_moving and tgt:
+                # 移動中: 現在階と行先階を表示
+                header = "移動中"
+                body = f"{cur} → {tgt}"
+                
+                # ヘッダー（移動中）
+                bb_header = draw.textbbox((0,0), header, font=font_medium)
+                draw.text(((WIDTH-bb_header[2])//2, 30), header, font=font_medium, fill='yellow')
+                
+                # メイン表示（現在階 → 行先階）
+                bb_body = draw.textbbox((0,0), body, font=font_large)
+                draw.text(((WIDTH-bb_body[2])//2, 100), body, font=font_large, fill='white')
+                
+                # 矢印アニメーション
+                arrow_y = 160
+                arrow_x = WIDTH // 2
+                # 簡単な点滅効果
+                if int(time.time() * 2) % 2:
+                    draw.text((arrow_x - 10, arrow_y), "▶", font=font_medium, fill='green')
+                
+            else:
+                # 停止中: 現在階のみ表示
+                header = "現在階"
+                body = cur
+                
+                # ヘッダー（現在階）
+                bb_header = draw.textbbox((0,0), header, font=font_medium)
+                draw.text(((WIDTH-bb_header[2])//2, 50), header, font=font_medium, fill='lightblue')
+                
+                # メイン表示（現在階）
+                bb_body = draw.textbbox((0,0), body, font=font_large)
+                draw.text(((WIDTH-bb_body[2])//2, 120), body, font=font_large, fill='white')
+            
+            # 日時表示
+            now = datetime.now().strftime("%Y年%-m月%-d日 %H:%M:%S")
+            bb_time = draw.textbbox((0,0), now, font=font_small)
+            draw.text(((WIDTH-bb_time[2])//2, HEIGHT-40), now, font=font_small, fill='gray')
+            
+            # フレーム送信
+            buf = pil_to_gst_buffer(img)
+            if self.appsrc.emit('push-buffer', buf) != Gst.FlowReturn.OK:
+                break
             time.sleep(1.0/FPS)
 
 def signal_handler(signum, frame):
@@ -345,17 +421,25 @@ def signal_handler(signum, frame):
     receiver.stop()
     sys.exit(0)
 
-if __name__=='__main__':
+if __name__ == '__main__':
+    logger.info("🏢 SEC-3000H エレベーター案内ディスプレイ起動中...")
+    logger.info("📺 backend-cli専用バージョン")
+    
     Gst.init(None)
-    receiver=AutoModeElevatorReceiver(SERIAL_PORT,BAUDRATE)
+    receiver = ElevatorDisplayReceiver(SERIAL_PORT, BAUDRATE)
     receiver.start()
-    server=GstRtspServer.RTSPServer.new()
-    server.props.service='8554'
-    mount=server.get_mount_points()
-    mount.add_factory('/elevator',AppSrcFactory(receiver))
+    
+    server = GstRtspServer.RTSPServer.new()
+    server.props.service = '8554'
+    mount = server.get_mount_points()
+    mount.add_factory('/elevator', ElevatorDisplayFactory(receiver))
     server.attach(None)
-    signal.signal(signal.SIGINT,signal_handler)
-    signal.signal(signal.SIGTERM,signal_handler)
-    ip=get_local_ip()
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    ip = get_local_ip()
     logger.info(f"✅ RTSPサーバー起動: rtsp://{ip}:8554/elevator")
+    logger.info("🎯 エレベーター案内ディスプレイ稼働中...")
+    
     GLib.MainLoop().run()

@@ -700,15 +700,22 @@ export class ElevatorController {
 
     // 自動運転モードかどうかをチェック
     const isAutoMode = process.env.AUTO_MODE === "true";
-    const broadcastInterval = isAutoMode ? 500 : 1000; // 自動運転モード時は0.5秒間隔
+    const broadcastInterval = isAutoMode ? 200 : 1000; // 自動運転モード時は0.2秒間隔
 
-    // SEC-3000H仕様書に従い、データ番号0001〜0003を順次送信
+    // 自動運転モード時は現在階を重点的に送信
     let currentDataIndex = 0;
-    const dataSequence = [
-      ElevatorCommands.CURRENT_FLOOR,
-      ElevatorCommands.TARGET_FLOOR,
-      ElevatorCommands.LOAD_WEIGHT,
-    ];
+    const dataSequence = isAutoMode
+      ? [
+          ElevatorCommands.CURRENT_FLOOR,
+          ElevatorCommands.CURRENT_FLOOR, // 現在階を2回送信
+          ElevatorCommands.TARGET_FLOOR,
+          ElevatorCommands.LOAD_WEIGHT,
+        ]
+      : [
+          ElevatorCommands.CURRENT_FLOOR,
+          ElevatorCommands.TARGET_FLOOR,
+          ElevatorCommands.LOAD_WEIGHT,
+        ];
 
     this.statusBroadcastTimer = setInterval(async () => {
       try {
