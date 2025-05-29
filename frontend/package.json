@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "dev:auto": "cross-env VITE_AUTO_MODE=true vite",
+    "dev:autoPi": "cross-env VITE_AUTO_MODE=true VITE_RASPBERRY_PI_MODE=true vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",

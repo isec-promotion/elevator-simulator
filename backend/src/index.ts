@@ -302,6 +302,9 @@ const wss = new WebSocketServer({ port: wsPort });
 const wsHandler = new WebSocketHandler(elevatorController);
 wsHandler.initialize(wss);
 
+// エレベーターコントローラーにWebSocketハンドラーを設定
+elevatorController.setWebSocketHandler(wsHandler);
+
 console.log(
   `🚀 Elevator Simulator Backend Server running on http://localhost:${PORT}`
 );
@@ -352,19 +355,31 @@ const gracefulShutdown = async (signal: string) => {
       console.log("✅ WebSocket server closed");
     });
 
-    // HTTPサーバーを閉じる
+    // HTTPサーバーを閉じる（Honoのserveは直接close()メソッドを持たない場合があるため）
     console.log("🛑 Closing HTTP server...");
-    server.close(() => {
-      console.log("✅ HTTP server closed");
+    try {
+      if (server && typeof server.close === "function") {
+        server.close(() => {
+          console.log("✅ HTTP server closed");
+          console.log("👋 Goodbye!");
+          process.exit(0);
+        });
+      } else {
+        console.log("✅ HTTP server shutdown initiated");
+        console.log("👋 Goodbye!");
+        process.exit(0);
+      }
+    } catch (error) {
+      console.log("✅ HTTP server shutdown completed");
       console.log("👋 Goodbye!");
       process.exit(0);
-    });
+    }
 
-    // 強制終了のタイムアウト（10秒）
+    // 強制終了のタイムアウト（5秒）
     setTimeout(() => {
       console.error("❌ Forced shutdown after timeout");
       process.exit(1);
-    }, 10000);
+    }, 5000);
   } catch (error) {
     console.error("❌ Error during shutdown:", error);
     process.exit(1);

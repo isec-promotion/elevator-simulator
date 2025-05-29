@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-SEC-3000H エレベーターシミュレーター 自動運転モード用 Raspberry Pi スクリプト
+SEC-3000H エレベーターシミュレーター 表示システム with RTSPストリーミング
 """
 
 import serial
@@ -11,14 +11,17 @@ import logging
 import threading
 import signal
 import sys
+import cv2
+import numpy as np
 from datetime import datetime
 from typing import Dict, Any, Optional
+from PIL import Image, ImageDraw, ImageFont
+import os
 
 # ログ設定
-import os
 log_dir = os.path.expanduser('~/logs')
 os.makedirs(log_dir, exist_ok=True)
-log_file = os.path.join(log_dir, 'elevator_auto_mode.log')
+log_file = os.path.join(log_dir, 'elevator_display_streamer.log')
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,22 +33,30 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class AutoModeElevatorReceiver:
-    """自動運転モード用エレベーター通信受信クラス"""
+class ElevatorDisplayStreamer:
+    """エレベーター表示システム with RTSPストリーミング"""
     
-    def __init__(self, port: str = '/dev/ttyUSB0', baudrate: int = 9600):
+    def __init__(self, port: str = '/dev/ttyUSB0', baudrate: int = 9600, rtsp_port: int = 8554):
         self.port = port
         self.baudrate = baudrate
+        self.rtsp_port = rtsp_port
         self.serial_conn: Optional[serial.Serial] = None
         self.running = False
         self.auto_mode_enabled = False
         
+        # 画像設定
+        self.image_width = 1920
+        self.image_height = 1080
+        self.background_color = '#b2ffff'  # 指定された背景色
+        self.text_color = '#000000'  # 黒色テキスト
+        self.image_path = '/tmp/elevator_display.jpg'  # 一時ファイル（上書き用）
+        
         # 自動運転モード設定
         self.auto_config = {
-            'passenger_weight': 60,  # 1人あたりの重量（kg）
-            'max_passengers': 10,    # 最大乗客数
-            'operation_interval': 10,  # 運転間隔（秒）
-            'door_open_time': 5      # ドア開放時間（秒）
+            'passenger_weight': 60,
+            'max_passengers': 10,
+            'operation_interval': 10,
+            'door_open_time': 5
         }
         
         # 現在の状態
@@ -55,11 +66,16 @@ class AutoModeElevatorReceiver:
             'door_status': 'unknown',
             'load_weight': 0,
             'passengers': 0,
-            'last_communication': None
+            'last_communication': None,
+            'is_moving': False
         }
         
         # 通信ログ
         self.communication_logs = []
+        
+        # RTSPストリーミング用
+        self.streaming_thread = None
+        self.image_updated = False
         
     def connect(self) -> bool:
         """シリアルポートに接続"""
@@ -187,34 +203,157 @@ class AutoModeElevatorReceiver:
             logger.error(f"❌ 応答送信エラー: {e}")
             return False
     
+    def create_display_image(self):
+        """表示用画像を生成"""
+        try:
+            # PIL画像を作成
+            img = Image.new('RGB', (self.image_width, self.image_height), self.background_color)
+            draw = ImageDraw.Draw(img)
+            
+            # フォントサイズを大きく設定（遠くから見えるように）
+            try:
+                # システムフォントを試行
+                font_size = 200  # 非常に大きなフォントサイズ
+                font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
+            except:
+                try:
+                    # 代替フォント
+                    font = ImageFont.truetype("/usr/share/fonts/TTF/arial.ttf", font_size)
+                except:
+                    # デフォルトフォント（サイズ指定なし）
+                    font = ImageFont.load_default()
+                    logger.warning("⚠️ システムフォントが見つかりません。デフォルトフォントを使用します")
+            
+            # 表示テキストを決定
+            current_floor = self.current_status.get('current_floor', '---')
+            target_floor = self.current_status.get('target_floor', None)
+            
+            # 移動中かどうかを判定
+            if target_floor and target_floor != current_floor and target_floor != '---':
+                # 移動中: 現在階 ⇒ 行先階
+                display_text = f"{current_floor} ⇒ {target_floor}"
+                self.current_status['is_moving'] = True
+            else:
+                # 停止中: 現在階のみ
+                display_text = current_floor
+                self.current_status['is_moving'] = False
+            
+            # テキストサイズを取得
+            bbox = draw.textbbox((0, 0), display_text, font=font)
+            text_width = bbox[2] - bbox[0]
+            text_height = bbox[3] - bbox[1]
+            
+            # 中央に配置
+            x = (self.image_width - text_width) // 2
+            y = (self.image_height - text_height) // 2
+            
+            # テキストを描画
+            draw.text((x, y), display_text, fill=self.text_color, font=font)
+            
+            # 画像を保存（上書き）
+            img.save(self.image_path, 'JPEG', quality=95)
+            
+            self.image_updated = True
+            logger.info(f"🖼️ 表示画像を更新: {display_text}")
+            
+        except Exception as e:
+            logger.error(f"❌ 画像生成エラー: {e}")
+    
+    def start_rtsp_streaming(self):
+        """RTSPストリーミングを開始"""
+        def streaming_loop():
+            try:
+                # 初期画像を作成
+                self.create_display_image()
+                
+                # OpenCVでRTSPストリーミングを設定
+                # GStreamerパイプラインを使用してRTSPサーバーを起動
+                gst_pipeline = (
+                    f"appsrc ! videoconvert ! x264enc tune=zerolatency bitrate=2000 speed-preset=superfast ! "
+                    f"rtph264pay config-interval=1 pt=96 ! gdppay ! tcpserversink host=0.0.0.0 port={self.rtsp_port}"
+                )
+                
+                # OpenCVのVideoWriterを使用
+                fourcc = cv2.VideoWriter_fourcc(*'H264')
+                out = cv2.VideoWriter(gst_pipeline, cv2.CAP_GSTREAMER, 0, 30.0, (self.image_width, self.image_height))
+                
+                if not out.isOpened():
+                    logger.error("❌ RTSPストリーミングの初期化に失敗しました")
+                    return
+                
+                logger.info(f"📺 RTSPストリーミングを開始しました (ポート: {self.rtsp_port})")
+                logger.info(f"📺 接続URL: rtsp://[RaspberryPi_IP]:{self.rtsp_port}/")
+                
+                while self.running:
+                    try:
+                        # 画像が更新された場合、または定期的に画像を読み込み
+                        if self.image_updated or True:  # 常に更新をチェック
+                            if os.path.exists(self.image_path):
+                                # PIL画像をOpenCV形式に変換
+                                pil_img = Image.open(self.image_path)
+                                cv_img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+                                
+                                # フレームを送信
+                                out.write(cv_img)
+                                self.image_updated = False
+                        
+                        time.sleep(1/30)  # 30FPS
+                        
+                    except Exception as e:
+                        logger.error(f"❌ ストリーミングエラー: {e}")
+                        time.sleep(1)
+                
+                out.release()
+                logger.info("📺 RTSPストリーミングを停止しました")
+                
+            except Exception as e:
+                logger.error(f"❌ RTSPストリーミング初期化エラー: {e}")
+                logger.info("💡 代替方法: 画像ファイルのみ生成します")
+        
+        self.streaming_thread = threading.Thread(target=streaming_loop, daemon=True)
+        self.streaming_thread.start()
+    
     def update_status_from_message(self, parsed: Dict[str, Any]):
         """受信メッセージから状態を更新"""
         data_num = parsed['data_num']
         data_value = parsed['data_value']
+        status_changed = False
         
         if data_num == 0x0001:  # 現在階数
             floor_name = "B1F" if data_value == 0xFFFF else f"{data_value}F"
-            self.current_status['current_floor'] = floor_name
-            logger.info(f"🏢 現在階数を更新: {floor_name} (データ値: {data_value:04X})")
+            if self.current_status['current_floor'] != floor_name:
+                self.current_status['current_floor'] = floor_name
+                status_changed = True
+                logger.info(f"🏢 現在階数を更新: {floor_name} (データ値: {data_value:04X})")
         elif data_num == 0x0002:  # 行先階
             floor_name = "B1F" if data_value == 0xFFFF else f"{data_value}F"
-            self.current_status['target_floor'] = floor_name
-            logger.info(f"🎯 行先階を更新: {floor_name} (データ値: {data_value:04X})")
+            if self.current_status['target_floor'] != floor_name:
+                self.current_status['target_floor'] = floor_name
+                status_changed = True
+                logger.info(f"🎯 行先階を更新: {floor_name} (データ値: {data_value:04X})")
         elif data_num == 0x0003:  # 荷重
-            self.current_status['load_weight'] = data_value
-            # 荷重から乗客数を推定
-            self.current_status['passengers'] = max(0, data_value // self.auto_config['passenger_weight'])
-            logger.info(f"⚖️ 荷重を更新: {data_value}kg, 乗客数: {self.current_status['passengers']}人")
+            if self.current_status['load_weight'] != data_value:
+                self.current_status['load_weight'] = data_value
+                self.current_status['passengers'] = max(0, data_value // self.auto_config['passenger_weight'])
+                logger.info(f"⚖️ 荷重を更新: {data_value}kg, 乗客数: {self.current_status['passengers']}人")
         elif data_num == 0x0010:  # 階数設定
             floor_name = "B1F" if data_value == 0xFFFF else f"{data_value}F"
-            self.current_status['current_floor'] = floor_name
-            logger.info(f"🏢 階数設定により現在階数を更新: {floor_name} (データ値: {data_value:04X})")
+            if self.current_status['current_floor'] != floor_name:
+                self.current_status['current_floor'] = floor_name
+                status_changed = True
+                logger.info(f"🏢 階数設定により現在階数を更新: {floor_name} (データ値: {data_value:04X})")
         elif data_num == 0x0016:  # 階数設定（自動運転モード）
             floor_name = "B1F" if data_value == 0xFFFF else f"{data_value}F"
-            self.current_status['current_floor'] = floor_name
-            logger.info(f"🏢 自動運転モード階数設定により現在階数を更新: {floor_name} (データ値: {data_value:04X})")
+            if self.current_status['current_floor'] != floor_name:
+                self.current_status['current_floor'] = floor_name
+                status_changed = True
+                logger.info(f"🏢 自動運転モード階数設定により現在階数を更新: {floor_name} (データ値: {data_value:04X})")
         
         self.current_status['last_communication'] = datetime.now().isoformat()
+        
+        # 状態が変更された場合、画像を更新
+        if status_changed:
+            self.create_display_image()
     
     def add_communication_log(self, direction: str, message: str, result: str = "success"):
         """通信ログを追加"""
@@ -345,12 +484,20 @@ class AutoModeElevatorReceiver:
             'current_status': self.current_status.copy(),
             'auto_config': self.auto_config.copy(),
             'communication_logs': self.communication_logs[-10:],  # 最新10件
-            'connection_status': 'connected' if (self.serial_conn and self.serial_conn.is_open) else 'disconnected'
+            'connection_status': 'connected' if (self.serial_conn and self.serial_conn.is_open) else 'disconnected',
+            'image_path': self.image_path,
+            'rtsp_url': f"rtsp://[RaspberryPi_IP]:{self.rtsp_port}/"
         }
     
     def start(self):
-        """受信開始"""
+        """システム開始"""
         self.running = True
+        
+        # 初期画像を作成
+        self.create_display_image()
+        
+        # RTSPストリーミングを開始
+        self.start_rtsp_streaming()
         
         if self.connect():
             # 自動運転モードを有効化
@@ -360,34 +507,62 @@ class AutoModeElevatorReceiver:
             listen_thread = threading.Thread(target=self.listen, daemon=True)
             listen_thread.start()
             
-            logger.info("🚀 自動運転モード用エレベーター受信システムを開始しました")
+            logger.info("🚀 エレベーター表示システム with RTSPストリーミングを開始しました")
+            logger.info(f"📺 RTSP URL: rtsp://[RaspberryPi_IP]:{self.rtsp_port}/")
+            logger.info(f"🖼️ 画像ファイル: {self.image_path}")
             
             try:
                 while self.running:
                     # 定期的に状態をログ出力
                     time.sleep(30)
                     status = self.get_status()
-                    logger.info(f"📊 現在の状態: 階数={status['current_status']['current_floor']}, "
-                              f"乗客数={status['current_status']['passengers']}人, "
-                              f"荷重={status['current_status']['load_weight']}kg")
+                    current_floor = status['current_status']['current_floor'] or '---'
+                    target_floor = status['current_status']['target_floor'] or '---'
+                    is_moving = status['current_status']['is_moving']
+                    
+                    if is_moving:
+                        logger.info(f"📊 現在の状態: {current_floor} ⇒ {target_floor} (移動中), "
+                                  f"乗客数={status['current_status']['passengers']}人, "
+                                  f"荷重={status['current_status']['load_weight']}kg")
+                    else:
+                        logger.info(f"📊 現在の状態: {current_floor} (停止中), "
+                                  f"乗客数={status['current_status']['passengers']}人, "
+                                  f"荷重={status['current_status']['load_weight']}kg")
                     
             except KeyboardInterrupt:
                 logger.info("🛑 キーボード割り込みを受信しました")
         else:
             logger.error("❌ シリアルポート接続に失敗しました")
+            logger.info("💡 画像生成とストリーミングのみ継続します")
+            
+            try:
+                while self.running:
+                    time.sleep(30)
+                    logger.info("📊 シリアル接続なしで動作中（画像生成・ストリーミングのみ）")
+            except KeyboardInterrupt:
+                logger.info("🛑 キーボード割り込みを受信しました")
     
     def stop(self):
-        """受信停止"""
+        """システム停止"""
         self.running = False
         self.disable_auto_mode()
         self.disconnect()
-        logger.info("✅ 自動運転モード用エレベーター受信システムを停止しました")
+        
+        # 一時ファイルを削除
+        # if os.path.exists(self.image_path):
+        #     try:
+        #         os.remove(self.image_path)
+        #         logger.info(f"🗑️ 一時画像ファイルを削除しました: {self.image_path}")
+        #     except:
+        #         pass
+        
+        logger.info("✅ エレベーター表示システムを停止しました")
 
 def signal_handler(signum, frame):
     """シグナルハンドラー"""
     logger.info(f"🛑 シグナル {signum} を受信しました。システムを停止します...")
-    if 'receiver' in globals():
-        receiver.stop()
+    if 'streamer' in globals():
+        streamer.stop()
     sys.exit(0)
 
 def main():
@@ -396,19 +571,19 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
-    logger.info("🏢 SEC-3000H エレベーターシミュレーター 自動運転モード")
-    logger.info("📡 Raspberry Pi 受信システム v1.0")
-    logger.info("=" * 50)
+    logger.info("🏢 SEC-3000H エレベーターシミュレーター 表示システム")
+    logger.info("📺 RTSPストリーミング対応 v1.0")
+    logger.info("=" * 60)
     
-    # 受信システム初期化
-    global receiver
-    receiver = AutoModeElevatorReceiver()
+    # システム初期化
+    global streamer
+    streamer = ElevatorDisplayStreamer()
     
     try:
-        receiver.start()
+        streamer.start()
     except Exception as e:
         logger.error(f"❌ システムエラー: {e}")
-        receiver.stop()
+        streamer.stop()
         sys.exit(1)
 
 if __name__ == "__main__":

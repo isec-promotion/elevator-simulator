@@ -1,0 +1,17 @@
+# 動的映像RTSPテストサーバー用の依存関係
+# pip install -r requirements_video.txt
+
+# 画像処理
+Pillow>=9.0.0
+
+# 数値計算
+numpy>=1.21.0
+
+# OpenCV (映像処理)
+opencv-python>=4.5.0
+
+# ログ出力 (標準ライブラリなので不要だが、念のため記載)
+# logging - 標準ライブラリ
+
+# その他の標準ライブラリ
+# time, subprocess, socket, os, threading - すべて標準ライブラリ

@@ -1,0 +1,15 @@
+# Raspberry Pi 4B エレベーター表示システム用依存関係
+# Python 3.7+ required
+
+# シリアル通信
+pyserial>=3.5
+
+# 画像生成
+Pillow>=8.0.0
+
+# RTSPストリーミング
+opencv-python>=4.5.0
+numpy>=1.19.0
+
+# フォント処理
+fonttools>=4.0.0

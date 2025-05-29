@@ -254,13 +254,19 @@ export class WebSocketHandler {
   }
 
   private startStatusBroadcast(): void {
-    // 5秒ごとに状態をブロードキャスト
+    // 1秒ごとに状態をブロードキャスト（Raspberry Pi自動運転モード用に高頻度）
     this.statusInterval = setInterval(() => {
       if (this.clients.size > 0) {
         this.broadcastStatus();
         this.broadcastLogs();
       }
-    }, 5000);
+    }, 1000);
+  }
+
+  // 外部から状態ブロードキャストを呼び出すためのパブリックメソッド
+  public triggerStatusBroadcast(): void {
+    this.broadcastStatus();
+    this.broadcastLogs();
   }
 
   private stopStatusBroadcast(): void {

@@ -78,6 +78,8 @@ export class ElevatorController {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private simulationMode: boolean = false;
   private simulationTimer: NodeJS.Timeout | null = null;
+  private statusBroadcastTimer: NodeJS.Timeout | null = null;
+  private wsHandler: any = null; // WebSocketハンドラーの参照
 
   constructor(simulationMode: boolean = false) {
     this.simulationMode = simulationMode;
@@ -121,6 +123,9 @@ export class ElevatorController {
       "success",
       "疑似モード: シミュレーション開始"
     );
+
+    // 状態送信を開始
+    this.startStatusBroadcast();
   }
 
   async initialize(): Promise<void> {
@@ -460,8 +465,25 @@ export class ElevatorController {
       const dataNum = parseInt(dataNumStr);
       const dataValue = parseInt(dataValueStr, 16);
 
+      // NaNチェック
+      if (isNaN(station) || isNaN(dataNum) || isNaN(dataValue)) {
+        console.error(
+          `❌ Invalid data received: Station=${stationStr}, DataNum=${dataNumStr}, DataValue=${dataValueStr}`
+        );
+        return;
+      }
+
+      const timestamp = new Date().toLocaleString("ja-JP", {
+        timeZone: "Asia/Tokyo",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      });
       console.log(
-        `📨 Received: Station=${station}, Command=${command}, DataNum=${dataNum}, Data=${dataValue.toString(
+        `[${timestamp}] 📨 Received: Station=${station}, Command=${command}, DataNum=${dataNum}, Data=${dataValue.toString(
           16
         )}`
       );
@@ -492,16 +514,125 @@ export class ElevatorController {
     switch (dataNum) {
       case ElevatorCommands.CURRENT_FLOOR:
         this.status.currentFloor = this.decodeFloor(dataValue);
+        this.notifyStatusChange();
         break;
       case ElevatorCommands.TARGET_FLOOR:
         this.status.targetFloor = this.decodeFloor(dataValue);
+        this.notifyStatusChange();
         break;
       case ElevatorCommands.LOAD_WEIGHT:
         this.status.loadWeight = dataValue;
+        this.notifyStatusChange();
         break;
       case ElevatorCommands.DOOR_STATUS:
         this.status.doorStatus = this.decodeDoorStatus(dataValue);
+        this.notifyStatusChange();
         break;
+      case ElevatorCommands.FLOOR_SETTING:
+        // Raspberry Piからの階数設定を受信した場合
+        const targetFloor = this.decodeFloor(dataValue);
+        this.status.targetFloor = targetFloor;
+        this.status.isMoving = true;
+        const timestamp = new Date().toLocaleString("ja-JP", {
+          timeZone: "Asia/Tokyo",
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        });
+        console.log(
+          `[${timestamp}] 🎯 次の目標階: ${targetFloor} (現在: ${this.status.currentFloor})`
+        );
+        console.log(`[${timestamp}] 🚀 ${targetFloor}に移動中...`);
+        this.notifyStatusChange();
+
+        // 移動シミュレーション
+        setTimeout(() => {
+          this.status.currentFloor = targetFloor;
+          this.status.isMoving = false;
+          const arrivalTimestamp = new Date().toLocaleString("ja-JP", {
+            timeZone: "Asia/Tokyo",
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+          });
+          console.log(`[${arrivalTimestamp}] ✅ ${targetFloor}に到着しました`);
+          this.notifyStatusChange();
+        }, ELEVATOR_TIMING.FLOOR_MOVEMENT_TIME);
+        break;
+      case ElevatorCommands.DOOR_CONTROL:
+        // Raspberry Piからの扉制御を受信した場合
+        const doorTimestamp = new Date().toLocaleString("ja-JP", {
+          timeZone: "Asia/Tokyo",
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        });
+
+        if (dataValue === DoorControl.OPEN) {
+          this.status.doorStatus = "opening";
+          console.log(`[${doorTimestamp}] 🚪 扉を開いています...`);
+          this.notifyStatusChange();
+          setTimeout(() => {
+            this.status.doorStatus = "open";
+            const openTimestamp = new Date().toLocaleString("ja-JP", {
+              timeZone: "Asia/Tokyo",
+              year: "numeric",
+              month: "2-digit",
+              day: "2-digit",
+              hour: "2-digit",
+              minute: "2-digit",
+              second: "2-digit",
+            });
+            console.log(`[${openTimestamp}] ✅ 扉が開きました`);
+            this.notifyStatusChange();
+          }, ELEVATOR_TIMING.DOOR_OPERATION_TIME);
+        } else if (dataValue === DoorControl.CLOSE) {
+          this.status.doorStatus = "closing";
+          console.log(`[${doorTimestamp}] 🚪 扉を閉じています...`);
+          this.notifyStatusChange();
+          setTimeout(() => {
+            this.status.doorStatus = "closed";
+            const closeTimestamp = new Date().toLocaleString("ja-JP", {
+              timeZone: "Asia/Tokyo",
+              year: "numeric",
+              month: "2-digit",
+              day: "2-digit",
+              hour: "2-digit",
+              minute: "2-digit",
+              second: "2-digit",
+            });
+            console.log(`[${closeTimestamp}] ✅ 扉が閉まりました`);
+            this.notifyStatusChange();
+          }, ELEVATOR_TIMING.DOOR_OPERATION_TIME);
+        } else if (dataValue === DoorControl.STOP) {
+          console.log(`[${doorTimestamp}] 🛑 扉動作を停止しました`);
+          this.notifyStatusChange();
+        }
+        break;
+    }
+  }
+
+  // WebSocketハンドラーを設定
+  setWebSocketHandler(wsHandler: any): void {
+    this.wsHandler = wsHandler;
+  }
+
+  // 状態変更をWebSocketクライアントに通知
+  private notifyStatusChange(): void {
+    if (
+      this.wsHandler &&
+      typeof this.wsHandler.triggerStatusBroadcast === "function"
+    ) {
+      this.wsHandler.triggerStatusBroadcast();
     }
   }
 
@@ -556,6 +687,120 @@ export class ElevatorController {
     // ログの最大数を制限 (最新1000件)
     if (this.logs.length > 1000) {
       this.logs = this.logs.slice(-1000);
+    }
+  }
+
+  /**
+   * エレベーターから自動運転装置への状態送信を開始
+   */
+  private startStatusBroadcast(): void {
+    if (this.statusBroadcastTimer) {
+      clearInterval(this.statusBroadcastTimer);
+    }
+
+    // SEC-3000H仕様書に従い、データ番号0001〜0003を順次送信
+    let currentDataIndex = 0;
+    const dataSequence = [
+      ElevatorCommands.CURRENT_FLOOR,
+      ElevatorCommands.TARGET_FLOOR,
+      ElevatorCommands.LOAD_WEIGHT,
+    ];
+
+    this.statusBroadcastTimer = setInterval(async () => {
+      try {
+        const dataNum = dataSequence[currentDataIndex];
+        let dataValue = 0;
+
+        // 送信するデータを準備
+        switch (dataNum) {
+          case ElevatorCommands.CURRENT_FLOOR:
+            dataValue = this.status.currentFloor
+              ? this.encodeFloor(this.status.currentFloor)
+              : 1;
+            break;
+          case ElevatorCommands.TARGET_FLOOR:
+            dataValue = this.status.targetFloor
+              ? this.encodeFloor(this.status.targetFloor)
+              : 1;
+            break;
+          case ElevatorCommands.LOAD_WEIGHT:
+            dataValue = this.status.loadWeight || 0;
+            break;
+        }
+
+        // エレベーターから自動運転装置への送信（局番号0002）
+        await this.sendStatusToAutoDevice(0x0002, dataNum, dataValue);
+
+        // 次のデータ番号に進む
+        currentDataIndex = (currentDataIndex + 1) % dataSequence.length;
+      } catch (error) {
+        console.error("❌ Status broadcast error:", error);
+      }
+    }, 1000); // 1秒間隔で送信
+
+    console.log("📡 Status broadcast started");
+  }
+
+  /**
+   * 自動運転装置への状態送信
+   */
+  private async sendStatusToAutoDevice(
+    targetStation: number,
+    dataNum: ElevatorCommands,
+    dataValue: number
+  ): Promise<void> {
+    const message = this.createWriteCommand(targetStation, dataNum, dataValue);
+    const hexData = message.toString("hex").toUpperCase();
+    const readableData = this.formatSerialData(message);
+
+    // デバッグ用ログ
+    let dataDescription = "";
+    switch (dataNum) {
+      case ElevatorCommands.CURRENT_FLOOR:
+        const currentFloorName = dataValue === 0xffff ? "B1F" : `${dataValue}F`;
+        dataDescription = `現在階数: ${currentFloorName}`;
+        break;
+      case ElevatorCommands.TARGET_FLOOR:
+        const targetFloorName = dataValue === 0xffff ? "B1F" : `${dataValue}F`;
+        dataDescription = `行先階: ${targetFloorName}`;
+        break;
+      case ElevatorCommands.LOAD_WEIGHT:
+        dataDescription = `荷重: ${dataValue}kg`;
+        break;
+    }
+
+    console.log(
+      `📡 送信準備: ${dataDescription} (データ値: ${dataValue}, HEX: ${dataValue
+        .toString(16)
+        .toUpperCase()})`
+    );
+
+    if (this.serialPort?.isOpen) {
+      // 実際のシリアル通信
+      this.serialPort.write(message, (error) => {
+        if (error) {
+          this.addLog("send", hexData, "error", error.message);
+          console.error(`❌ 送信エラー: ${dataDescription} - ${error.message}`);
+        } else {
+          this.addLog("send", hexData, "success", readableData);
+          console.log(`✅ 送信成功: ${dataDescription}`);
+        }
+      });
+    } else {
+      // シミュレーションモード
+      this.addLog("send", hexData, "success", `${readableData} (疑似モード)`);
+      console.log(`📡 Status broadcast (疑似モード): ${dataDescription}`);
+    }
+  }
+
+  /**
+   * 状態送信を停止
+   */
+  private stopStatusBroadcast(): void {
+    if (this.statusBroadcastTimer) {
+      clearInterval(this.statusBroadcastTimer);
+      this.statusBroadcastTimer = null;
+      console.log("📡 Status broadcast stopped");
     }
   }
 
@@ -741,6 +986,9 @@ export class ElevatorController {
       clearInterval(this.simulationTimer);
       this.simulationTimer = null;
     }
+
+    // 状態送信を停止
+    this.stopStatusBroadcast();
 
     if (this.serialPort?.isOpen) {
       await new Promise<void>((resolve) => {

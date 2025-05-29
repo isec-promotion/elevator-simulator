@@ -9,6 +9,7 @@
     "dev:sim": "tsx watch src/index.ts --simulation",
     "dev:simulation": "SIMULATION_MODE=true tsx watch src/index.ts",
     "dev:auto": "cross-env AUTO_MODE=true tsx watch src/index.ts",
+    "dev:autoPi": "cross-env AUTO_MODE=true RASPBERRY_PI_MODE=true tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
     "start:sim": "node dist/index.js --simulation",
