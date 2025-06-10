@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-SEC-3000H Elevator Simulator
+SEC-3000H Elevator Simulator (修正版)
 エレベーター側シミュレーター（局番号: 0002）
-自動運転装置に対して現在階数、行先階、荷重を定期送信
+ACK受信問題を修正した完全動作版
 """
 
 import serial
@@ -18,7 +18,6 @@ from enum import IntEnum
 
 # ── 設定 ───────────────────────────────────
 SERIAL_PORT = "COM27"  # Windows の場合
-# SERIAL_PORT = "/dev/ttyUSB0"  # Linux の場合
 
 SERIAL_CONFIG = {
     'port': SERIAL_PORT,
@@ -59,8 +58,8 @@ class ElevatorState:
         self.door_status = "closed"
         self.is_moving = False
 
-class ElevatorSimulator:
-    """SEC-3000H エレベーターシミュレーター"""
+class ElevatorSimulatorFixed:
+    """SEC-3000H エレベーターシミュレーター（修正版）"""
     
     def __init__(self):
         self.serial_conn: Optional[serial.Serial] = None
@@ -68,23 +67,26 @@ class ElevatorSimulator:
         self.station_id = "0002"  # エレベーター側局番号
         self.auto_pilot_station = "0001"  # 自動運転装置側局番号
         self.running = False
-        self.transmission_timer: Optional[threading.Timer] = None
         self.lock = threading.Lock()
+        self.ack_received = False
         
-        # 送信データのインデックス
+        # 送信データのインデックス（SEC-3000H仕様：0001→0002→0003の順）
         self.data_sequence = [
             DataNumbers.CURRENT_FLOOR,
             DataNumbers.TARGET_FLOOR,
             DataNumbers.LOAD_WEIGHT
         ]
         self.current_data_index = 0
+        self.retry_count = 0
+        self.max_retries = 8  # SEC-3000H仕様：8回リトライ
 
     def initialize(self):
         """初期化"""
-        logger.info("🏢 SEC-3000H Elevator Simulator 起動中...")
-        logger.info(f"📡 シリアルポート設定: {SERIAL_PORT}")
+        logger.info("🏢 SEC-3000H Elevator Simulator (修正版) 起動中...")
+        logger.info(f"📡 シリアルポート設定: {SERIAL_CONFIG['port']}")
         logger.info(f"🏷️ 局番号: {self.station_id} (エレベーター側)")
         logger.info(f"🎯 送信先: {self.auto_pilot_station} (自動運転装置側)")
+        logger.info("📋 SEC-3000H仕様準拠：ACK応答待ち、1秒タイムアウト、8回リトライ")
 
         try:
             self._connect_serial()
@@ -98,7 +100,7 @@ class ElevatorSimulator:
         """シリアルポート接続"""
         try:
             self.serial_conn = serial.Serial(**SERIAL_CONFIG)
-            logger.info(f"✅ シリアルポート {SERIAL_PORT} 接続成功")
+            logger.info(f"✅ シリアルポート {SERIAL_CONFIG['port']} 接続成功")
             
             # 受信スレッド開始
             threading.Thread(target=self._listen_serial, daemon=True).start()
@@ -108,37 +110,59 @@ class ElevatorSimulator:
             raise
 
     def _listen_serial(self):
-        """シリアル受信処理（自動運転装置からのコマンド受信）"""
+        """シリアル受信処理（修正版）"""
         buffer = bytearray()
         
         while self.running and self.serial_conn and self.serial_conn.is_open:
             try:
                 if self.serial_conn.in_waiting > 0:
                     data = self.serial_conn.read(self.serial_conn.in_waiting)
-                    buffer.extend(data)
-                    
-                    # ENQ(05H)で始まるメッセージを検索
-                    while len(buffer) >= 16:
-                        enq_pos = buffer.find(0x05)
-                        if enq_pos == -1:
-                            buffer.clear()
-                            break
-                        
-                        if enq_pos > 0:
-                            buffer = buffer[enq_pos:]
-                        
-                        if len(buffer) >= 16:
-                            message = buffer[:16]
-                            buffer = buffer[16:]
-                            self._handle_received_command(message)
-                        else:
-                            break
+                    if data:
+                        buffer.extend(data)
+                        # ACK検出処理
+                        self._process_buffer(buffer)
                 
                 time.sleep(0.05)
                 
             except Exception as e:
                 logger.error(f"❌ シリアル受信エラー: {e}")
                 break
+
+    def _process_buffer(self, buffer: bytearray):
+        """バッファ処理（修正版）"""
+        while len(buffer) >= 5:
+            if buffer[0] == 0x06:  # ACK
+                ack_message = buffer[:5]
+                del buffer[:5]
+                self._handle_ack_response(ack_message)
+            elif buffer[0] == 0x05:  # ENQ（コマンド受信）
+                if len(buffer) >= 16:
+                    enq_message = buffer[:16]
+                    del buffer[:16]
+                    self._handle_received_command(enq_message)
+                else:
+                    break
+            else:
+                # 不正データを1バイトずつ破棄
+                del buffer[0]
+
+    def _handle_ack_response(self, data: bytes):
+        """ACK応答処理（修正版）"""
+        try:
+            if len(data) >= 5 and data[0] == 0x06:
+                station = data[1:5].decode('ascii')
+                timestamp = datetime.now().strftime("%Y年%m月%d日 %H:%M:%S")
+                
+                logger.info(f"[{timestamp}] 📨 ACK受信: {data.hex().upper()} (局番号: {station})")
+                
+                # エコーバック対応：両方の局番号を受け入れ
+                if station == self.station_id or station == self.auto_pilot_station:
+                    # ACK受信成功をシグナル
+                    self.ack_received = True
+                else:
+                    logger.warning(f"⚠️ 他局からのACK: {station}")
+        except Exception as e:
+            logger.error(f"❌ ACK処理エラー: {e}")
 
     def _handle_received_command(self, data: bytes):
         """受信コマンド処理（自動運転装置からの指令）"""
@@ -237,8 +261,8 @@ class ElevatorSimulator:
         checksum = (lower_byte + upper_byte) & 0xFF
         return f"{checksum:02X}"
 
-    def _send_data(self, data_num: int, data_value: int) -> bool:
-        """データ送信"""
+    def _send_data_with_ack_wait(self, data_num: int, data_value: int) -> bool:
+        """データ送信（ACK応答待ち）"""
         if not self.serial_conn or not self.serial_conn.is_open:
             return False
 
@@ -261,6 +285,9 @@ class ElevatorSimulator:
             checksum_data = message[1:]
             checksum = self._calculate_checksum(checksum_data)
             message.extend(checksum.encode('ascii'))
+
+            # ACK受信フラグをリセット
+            self.ack_received = False
 
             # 送信
             self.serial_conn.write(message)
@@ -286,14 +313,25 @@ class ElevatorSimulator:
                 f"{description} データ:{data_value_str} チェックサム:{checksum}"
             )
 
-            return True
+            # ACK応答待ち（1秒タイムアウト）
+            start_time = time.time()
+            while time.time() - start_time < 1.0:
+                if self.ack_received:
+                    logger.info(f"✅ ACK受信成功 (データ番号: {data_num:04X})")
+                    self.retry_count = 0  # リトライカウントリセット
+                    return True
+                time.sleep(0.1)
+
+            # タイムアウト
+            logger.warning(f"⏰ ACK応答タイムアウト (データ番号: {data_num:04X})")
+            return False
 
         except Exception as e:
             logger.error(f"❌ データ送信エラー: {e}")
             return False
 
-    def _continuous_transmission(self):
-        """連続データ送信"""
+    def _sec3000h_transmission(self):
+        """SEC-3000H仕様準拠データ送信"""
         if not self.running:
             return
 
@@ -322,26 +360,30 @@ class ElevatorSimulator:
                     # 荷重
                     data_value = self.state.load_weight
 
-            # データ送信
-            if self._send_data(data_num, data_value):
-                # 次のデータ番号へ
+            # データ送信（ACK応答待ち）
+            if self._send_data_with_ack_wait(data_num, data_value):
+                # ACK受信成功：次のデータ番号へ
                 self.current_data_index = (self.current_data_index + 1) % len(self.data_sequence)
+                self.retry_count = 0
                 
-                # 次の送信をスケジュール（wait無し、即座に次のデータ）
+                # 即座に次のデータを送信
                 if self.running:
-                    self.transmission_timer = threading.Timer(0.5, self._continuous_transmission)
-                    self.transmission_timer.start()
+                    threading.Timer(0.1, self._sec3000h_transmission).start()
             else:
-                # 送信失敗時は少し待ってリトライ
-                if self.running:
-                    self.transmission_timer = threading.Timer(1.0, self._continuous_transmission)
-                    self.transmission_timer.start()
+                # ACK受信失敗：リトライ処理
+                self.retry_count += 1
+                if self.retry_count <= self.max_retries:
+                    logger.warning(f"⚠️ リトライ {self.retry_count}/{self.max_retries} (データ番号: {data_num:04X})")
+                    if self.running:
+                        threading.Timer(0.5, self._sec3000h_transmission).start()
+                else:
+                    logger.error(f"❌ 最大リトライ回数到達、通信終了 (データ番号: {data_num:04X})")
+                    self.running = False
 
         except Exception as e:
-            logger.error(f"❌ 連続送信エラー: {e}")
+            logger.error(f"❌ SEC-3000H送信エラー: {e}")
             if self.running:
-                self.transmission_timer = threading.Timer(1.0, self._continuous_transmission)
-                self.transmission_timer.start()
+                threading.Timer(1.0, self._sec3000h_transmission).start()
 
     def start_transmission(self):
         """データ送信開始"""
@@ -349,21 +391,18 @@ class ElevatorSimulator:
             logger.info("⚠️ データ送信は既に実行中です")
             return
 
-        logger.info("🚀 連続データ送信開始")
-        logger.info(f"📊 送信データ: 現在階数(0001) → 行先階(0002) → 荷重(0003) → 繰り返し")
+        logger.info("🚀 SEC-3000H準拠データ送信開始")
+        logger.info(f"📊 送信順序: 現在階数(0001) → 行先階(0002) → 荷重(0003) → 繰り返し")
+        logger.info(f"⏰ ACK応答待ち: 1秒タイムアウト、最大{self.max_retries}回リトライ")
         self.running = True
 
-        # 連続送信開始
-        self._continuous_transmission()
+        # SEC-3000H準拠送信開始
+        self._sec3000h_transmission()
 
     def stop_transmission(self):
         """データ送信停止"""
         logger.info("🛑 データ送信停止")
         self.running = False
-
-        if self.transmission_timer:
-            self.transmission_timer.cancel()
-            self.transmission_timer = None
 
     def _display_status(self):
         """状態表示"""
@@ -382,6 +421,8 @@ class ElevatorSimulator:
         logger.info(f"荷重: {load_weight}kg")
         logger.info(f"扉状態: {door_status}")
         logger.info(f"移動中: {is_moving}")
+        logger.info(f"送信データ番号: {self.data_sequence[self.current_data_index]:04X}")
+        logger.info(f"リトライ回数: {self.retry_count}/{self.max_retries}")
 
     def start_status_display(self):
         """定期状態表示開始"""
@@ -417,7 +458,7 @@ def main():
     import argparse
     
     # コマンドライン引数解析
-    parser = argparse.ArgumentParser(description='SEC-3000H Elevator Simulator')
+    parser = argparse.ArgumentParser(description='SEC-3000H Elevator Simulator (修正版)')
     parser.add_argument('--port', default=SERIAL_PORT, help='シリアルポート')
     parser.add_argument('--load', type=int, default=0, help='初期荷重 (kg)')
     args = parser.parse_args()
@@ -426,14 +467,12 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
-    # グローバル変数設定
-    global SERIAL_PORT
-    SERIAL_PORT = args.port
+    # シリアルポート設定を更新
     SERIAL_CONFIG['port'] = args.port
     
     # エレベーターシミュレーター初期化
     global simulator
-    simulator = ElevatorSimulator()
+    simulator = ElevatorSimulatorFixed()
     simulator.state.load_weight = args.load
     
     try:
@@ -447,7 +486,7 @@ def main():
         # データ送信開始
         simulator.start_transmission()
         
-        logger.info("\n✅ エレベーターシミュレーター稼働中 (Ctrl+C で終了)")
+        logger.info("\n✅ SEC-3000H準拠エレベーターシミュレーター稼働中 (Ctrl+C で終了)")
         
         # メインループ
         while simulator.running:

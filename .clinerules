@@ -1,0 +1,4 @@
+## アクセス禁止フォルダ
+以下のフォルダは没プログラムなので読み込み不要
+raspberryPi\old
+backend-cli\old

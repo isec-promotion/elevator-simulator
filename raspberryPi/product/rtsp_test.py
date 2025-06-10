@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# RTSP 時刻表示サーバーのテスト
+# RTSP 時刻表示サーバーのテスト 完成版
 
 import gi
 gi.require_version('Gst', '1.0')

@@ -512,8 +512,8 @@ def main():
     signal.signal(signal.SIGTERM, signal_handler)
     
     # グローバル変数設定
-    global SERIAL_PORT
-    SERIAL_PORT = args.port
+
+
     SERIAL_CONFIG['port'] = args.port
     
     # 自動運転装置受信機初期化
