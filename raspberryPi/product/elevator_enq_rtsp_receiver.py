@@ -87,10 +87,18 @@ class ElevatorState:
         if floor_str == "なし":
             # 行先階がなしになった = 着床完了
             if self.target_floor is not None:
-                logger.info(f"🏁 着床検出: {self.current_floor} (行先階クリア)")
+                # 着床完了時は行先階を現在階として設定
+                arrival_floor = self.target_floor
+                logger.info(f"🏁 着床検出: {arrival_floor} (行先階クリア)")
                 self.arrival_detected = True
                 self.last_arrival_time = datetime.now()
-                self.add_communication_log(f"着床完了: {self.current_floor}")
+                self.add_communication_log(f"着床完了: {arrival_floor}")
+                
+                # 現在階を着床階に更新（着床完了後に現在階信号が来るまでの間）
+                if self.current_floor != arrival_floor:
+                    logger.info(f"🏢 着床による現在階更新: {self.current_floor} → {arrival_floor}")
+                    self.current_floor = arrival_floor
+                    self.add_communication_log(f"現在階: {arrival_floor}")
             
             self.target_floor = None
             self.is_moving = False
@@ -331,7 +339,8 @@ class SerialENQReceiver:
             DataNumbers.TARGET_FLOOR: None,   # 行先階
             DataNumbers.LOAD_WEIGHT: None     # 荷重
         }
-        self.duplicate_timeout = 0.2  # 重複判定のタイムアウト（秒）
+        self.duplicate_timeout = 0.8  # 重複判定のタイムアウト（秒）を調整
+        self.receive_buffer = bytearray()  # 受信バッファを追加
 
     def _is_duplicate_message(self, data_num: int, data_value: int) -> bool:
         """重複メッセージチェック"""
@@ -375,15 +384,24 @@ class SerialENQReceiver:
 
     def _connect_serial(self):
         """シリアルポート接続＋termios 設定"""
-        self.serial_conn = serial.Serial(**SERIAL_CONFIG)
+        # タイムアウトを短く設定して1バイトずつ読み込み
+        config = SERIAL_CONFIG.copy()
+        config['timeout'] = 0.1  # 100ms タイムアウト
+        
+        self.serial_conn = serial.Serial(**config)
+        
+        # 受信バッファをクリア
+        self.serial_conn.reset_input_buffer()
+        self.receive_buffer.clear()
+        
         fd = self.serial_conn.fileno()
         attrs = termios.tcgetattr(fd)
         # attrs[6] は c_cc 配列
-        attrs[6][termios.VMIN]  = 16   # 最低受信バイト数
-        attrs[6][termios.VTIME] = 5    # 0.5秒（デシ秒）
+        attrs[6][termios.VMIN]  = 1    # 1バイトずつ受信
+        attrs[6][termios.VTIME] = 1    # 0.1秒（デシ秒）
         termios.tcsetattr(fd, termios.TCSANOW, attrs)
 
-        logger.info(f"✅ シリアルポート {SERIAL_CONFIG['port']} 接続成功 (VMIN=16, VTIME=5)")
+        logger.info(f"✅ シリアルポート {SERIAL_CONFIG['port']} 接続成功 (VMIN=1, VTIME=1)")
         self.elevator_state.set_connection_status("接続中")
 
     def start_receiving(self):
@@ -401,8 +419,10 @@ class SerialENQReceiver:
         self.running = False
 
     def _receive_enq(self):
-        """ENQ受信処理（fixed-length read）"""
+        """ENQ受信処理（改善版）"""
         reconnect_attempts = 0
+        consecutive_errors = 0
+        max_consecutive_errors = 5
 
         while self.running:
             try:
@@ -412,30 +432,50 @@ class SerialENQReceiver:
                         time.sleep(5)
                         continue
 
-                # 16バイト固定受信（VMIN=16/VTIME=5 が効く）
-                data = self.serial_conn.read(16)
-
-                # 0バイト → 無視（警告を出さない）
+                # 1バイトずつ読み込んでバッファに蓄積
+                data = self.serial_conn.read(1)
+                
                 if len(data) == 0:
+                    # タイムアウト - 正常な状態
                     continue
-
-                # 1〜15バイト → 警告して破棄
-                if len(data) != 16:
-                    logger.warning(f"⚠️ 不完全受信: {len(data)} バイト (破棄)")
-                    continue
-
-                # 正常１６バイト → 解析バッファに渡す
-                buffer = bytearray(data)
-                self._parse_enq_messages(buffer)
+                
+                # 受信バッファに追加
+                self.receive_buffer.extend(data)
+                
+                # バッファが十分に大きくなったら解析を試行
+                if len(self.receive_buffer) >= 16:
+                    self._parse_enq_messages(self.receive_buffer)
+                
+                # バッファサイズ制限（メモリリーク防止）
+                if len(self.receive_buffer) > 1024:
+                    logger.warning("⚠️ 受信バッファが大きくなりすぎました。クリアします。")
+                    self.receive_buffer.clear()
+                
+                # エラーカウンターリセット
+                consecutive_errors = 0
 
             except serial.SerialException as e:
-                logger.error(f"❌ シリアル通信エラー: {e}")
-                self._close_serial()
-                time.sleep(2)
+                consecutive_errors += 1
+                logger.error(f"❌ シリアル通信エラー ({consecutive_errors}/{max_consecutive_errors}): {e}")
+                
+                if consecutive_errors >= max_consecutive_errors:
+                    logger.error("❌ 連続エラーが多すぎます。接続をリセットします。")
+                    self._close_serial()
+                    consecutive_errors = 0
+                    time.sleep(5)
+                else:
+                    time.sleep(1)
 
             except Exception as e:
-                logger.error(f"❌ 予期しないエラー: {e}")
-                time.sleep(1)
+                consecutive_errors += 1
+                logger.error(f"❌ 予期しないエラー ({consecutive_errors}/{max_consecutive_errors}): {e}")
+                
+                if consecutive_errors >= max_consecutive_errors:
+                    logger.error("❌ 連続エラーが多すぎます。システムを一時停止します。")
+                    time.sleep(10)
+                    consecutive_errors = 0
+                else:
+                    time.sleep(1)
 
     def _parse_enq_messages(self, buffer: bytearray):
         """ENQメッセージ解析"""
@@ -511,7 +551,7 @@ class SerialENQReceiver:
 
             # 重複チェック
             if self._is_duplicate_message(data_num, data_value):
-                # データ内容の解釈（ログ表示用）
+                # 重複メッセージはデバッグレベルでログ出力（通常は表示されない）
                 if data_num == DataNumbers.CURRENT_FLOOR:
                     floor = "B1F" if data_value == 0xFFFF else f"{data_value}F"
                     description = f"現在階数: {floor}"
@@ -527,7 +567,7 @@ class SerialENQReceiver:
                     description = f"不明データ(0x{data_num:04X}): {data_value}"
 
                 timestamp = datetime.now().strftime("%Y年%m月%d日 %H:%M:%S")
-                logger.info(f"[{timestamp}] 🔄 重複メッセージを破棄しました: {description}")
+                logger.debug(f"[{timestamp}] 🔄 重複メッセージを破棄: {description}")
                 return
 
             # ターミナル出力

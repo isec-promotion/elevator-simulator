@@ -3,7 +3,7 @@
 """
 エレベーターENQ専用シミュレーター
 指定された仕様に従ってENQメッセージのみを送信
-①現在階 → ②行先階 → ③乗客降客 → 10秒待機 → ④着床（行先階0000）
+①現在階 → ②行先階 → ③着床（行先階0000） → ④乗客降客 → 5秒待機
 """
 
 import serial
@@ -118,8 +118,8 @@ class ElevatorENQSimulator:
         
         logger.info("🚀 エレベーターENQ専用シミュレーション開始")
         logger.info("📋 送信仕様:")
-        logger.info("   ①現在階 → ②行先階 → ③乗客降客 → 10秒待機 → ④着床")
-        logger.info("   ①～③は1秒間隔で送信")
+        logger.info("   ①現在階 → ②行先階 → ③着床 → ④乗客降客 → 5秒待機")
+        logger.info("   ①～④は1秒間隔で送信")
         
         self.running = True
         
@@ -146,22 +146,7 @@ class ElevatorENQSimulator:
                     time.sleep(1)  # 1秒間隔で送信
                 logger.info("⏰ 3秒待機中...")
                 time.sleep(3)
-                
-                # ③乗客降客送信（5回）
-                for i in range(5):
-                    self._send_enq("0003", "074E", f"乗客降客: 1870kg ({i+1}/5)")
-                    time.sleep(1)  # 1秒間隔で送信
-                
-                # 10秒待機
-                logger.info("⏰ 10秒待機中...")
-                for i in range(10):
-                    if not self.running:
-                        break
-                    time.sleep(1)
-                
-                if not self.running:
-                    break
-                
+
                 # ④着床送信（5回）
                 for i in range(5):
                     self._send_enq("0002", "0000", f"着床: 行先階クリア ({i+1}/5)")
@@ -171,9 +156,20 @@ class ElevatorENQSimulator:
                 self.current_floor = target_floor
                 logger.info(f"🏁 着床完了: {self._floor_to_string(self.current_floor)}")
                 
-                # 次のシナリオまで少し待機
-                logger.info("⏰ 10秒待機中...")
-                time.sleep(10)
+                # ③乗客降客送信（5回）
+                for i in range(5):
+                    self._send_enq("0003", "074E", f"乗客降客: 1870kg ({i+1}/5)")
+                    time.sleep(1)  # 1秒間隔で送信
+                
+                # 5秒待機 次のシナリオへ移る
+                logger.info("⏰ 5秒待機中...")
+                for i in range(5):
+                    if not self.running:
+                        break
+                    time.sleep(1)
+                
+                if not self.running:
+                    break
                 
         except KeyboardInterrupt:
             logger.info("\n🛑 Ctrl+C が押されました")
